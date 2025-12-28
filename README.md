@@ -1,1 +1,1 @@
-# ValveVision-PiArm
+pip freeze > requirements.txt
