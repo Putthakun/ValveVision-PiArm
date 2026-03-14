@@ -1,7 +1,7 @@
 # ValveVision-PiArm
 
-ระบบตรวจจับวาล์ว (valve) ด้วย YOLOv8 ONNX บน Raspberry Pi 4
-พร้อมควบคุมแขนกล 6-DOF ผ่าน PCA9685
+ระบบควบคุมแขนกล 6-DOF บน Raspberry Pi 4 ผ่าน PCA9685
+รองรับการส่งพิกัด x, y, z (mm) แล้วให้แขนเคลื่อนไปยังตำแหน่งนั้น
 
 ---
 
@@ -10,10 +10,34 @@
 | ชิ้นส่วน | รุ่น / สเปค |
 |----------|------------|
 | SBC | Raspberry Pi 4 |
-| Camera | Camera Module V3 (ติดด้านบน มองลงหา valve) |
 | Servo driver | PCA9685 (I2C, address 0x40) |
-| Servo | RDS3115 MG × 6 ตัว |
-| Model | YOLOv8 ONNX, 1 class (valve), input 640×640 |
+| Servo | × 6 ตัว, pulse range 500–2500 µs |
+
+---
+
+## โครงสร้างแขน
+
+```
+ปลาย gripper
+    │← L4 = 180 mm  (J4 → ปลาย)
+   [J4] wrist pitch
+    │← L3 = 135 mm  (J3 → J4)
+   [J3] elbow
+    │← L2 =  50 mm  (J2 → J3)
+   [J2] shoulder
+    │← L1 =  10 mm  (J1 → J2)
+   [J1] base (หมุนซ้าย-ขวา)
+════════════ ฐาน
+```
+
+| Joint | Channel | INVERT | ZERO_OFFSET |
+|-------|---------|--------|-------------|
+| J1 Base | CH0 | False | 0 |
+| J2 Shoulder | CH1 | True | 0 |
+| J3 Elbow | CH2 | True | +7° |
+| J4 Wrist pitch | CH3 | False | +7° |
+| J5 Wrist roll | CH4 | False | 0 |
+| J6 Gripper | CH5 | False | 0 |
 
 ---
 
@@ -21,16 +45,14 @@
 
 ```
 ValveVision-PiArm/
-├── models/
-│   └── Valve_detection_model.onnx   # YOLOv8 export
-├── captures/                        # ภาพที่บันทึกเมื่อ detect ได้
-├── docs/
-│   └── home_position_setup.md       # วิธีประกอบ servo + จัด HOME
-├── infer_cam_onnx.py                # Main loop: camera + detection + arm
-├── infer_image_onnx.py              # ทดสอบ model กับภาพนิ่ง
-├── home_position.py                 # ArmController (PCA9685)
-├── servo_scan_pulse.py              # Calibrate servo ทีละตัว
-├── test_camera.py                   # ทดสอบมุมกล้อง (headless / no GUI)
+├── config.py                  # ค่า link, channel, limits, offsets
+├── ik_solver.py               # IK: แปลง (x,y,z) → joint angles
+├── servo_controller.py        # ส่งคำสั่งไป servo ผ่าน PCA9685
+├── step1_home.py              # ส่งทุก joint → 90° เพื่อจัด horn
+├── step2_test_direction.py    # หา INVERT flag ทีละ joint
+├── step3_calibrate_offsets.py # หา ZERO_OFFSET ทีละ joint
+├── servo_scan_pulse.py        # ส่ง pulse ตรงๆ เพื่อ calibrate
+├── test_ik_servo.py           # ทดสอบส่งพิกัด x,y,z → แขนจริง
 └── requirements.txt
 ```
 
@@ -42,115 +64,71 @@ ValveVision-PiArm/
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-# picamera2 ติดมากับ Pi OS แล้ว ถ้าไม่มีให้รัน:
-# sudo apt install python3-picamera2
 ```
 
 ---
 
-## Servo Calibration (วัดจริง)
+## Setup แขนใหม่ (ทำครั้งเดียว)
 
-> เรียงข้อต่อจากล่างขึ้นบน
+### 1 — จัด Horn
+```bash
+python step1_home.py
+```
+ส่งทุก joint → 90° แล้วขัน horn ให้แขนตั้งตรง
 
-| CH | Joint | MIN (µs) | MID (µs) | MAX (µs) | HOME (µs) | หมายเหตุ |
-|----|-------|----------|----------|----------|-----------|---------|
-| 0 | Base | 600 | 1500 | 2400 | **1500** | |
-| 1 | Shoulder | 1200 | 1500 | 2400 | **2000** | |
-| 2 | Elbow | 600 | 1500 | 2400 | **600** | |
-| 3 | Wrist | 600 | 1500 | 2400 | **2500** | |
-| 4 | Rotate | 600 | 1500 | 2400 | **1500** | |
-| 5 | Grip | 1200 | 1500 | 1700 | **1700** | 1200=เปิด, 1700=ปิด |
+### 2 — หา INVERT
+```bash
+python step2_test_direction.py
+```
+ขยับทีละ joint แล้วตอบ y/n → print ค่า `INVERT` ให้คัดลอกใส่ `config.py`
+
+### 3 — หา ZERO_OFFSET
+```bash
+python step3_calibrate_offsets.py
+```
+ปรับด้วย `+` `-` `>` `<` จนแขนตรง → print ค่า `ZERO_OFFSET` ให้คัดลอกใส่ `config.py`
 
 ---
 
-## รันแต่ละไฟล์
+## ใช้งาน
 
-### ทดสอบมุมกล้อง — `test_camera.py`
-
-> สำหรับ remote ผ่าน VSCode ที่ไม่มี GUI
-
+### ทดสอบส่งพิกัด
 ```bash
-# ถ่ายภาพนิ่ง → บันทึก camera_test.jpg (เปิดดูใน VSCode ได้เลย)
-python test_camera.py
-
-# Live stream ที่ port 8080
-python test_camera.py --stream
-# เปิด browser บน host → http://<IP_ของ_PI>:8080
-
-# หา IP
-hostname -I
+python test_ik_servo.py
+```
+```
+>>> 300 0 150      # x=300mm, y=0, z=150mm
+>>> 330 0 100
+>>> home           # กลับ home
+>>> q              # ออก
 ```
 
-### ทดสอบ model กับภาพนิ่ง — `infer_image_onnx.py`
+### Workspace (horizontal gripper)
 
-```bash
-python infer_image_onnx.py
-# บันทึกผลเป็น output.jpg
-```
+สำหรับ y=0, gripper แนวนอน พิกัดที่ใช้งานได้:
 
-| ค่า | ค่าเริ่มต้น |
-|-----|------------|
-| `CONF_TH` | 0.20 |
-| `IOU_TH` | 0.45 |
-| `IMAGE_PATH` | `test_images/IMG_1138.JPG` |
+| z (mm) | x range (mm) |
+|--------|--------------|
+| 100 | 290 – 340 |
+| 150 | 215 – 300 |
+| 170 | 170 – 270 |
 
-### Real-time detection + arm — `infer_cam_onnx.py`
-
-```bash
-python infer_cam_onnx.py
-```
-
-| ค่า | ค่าเริ่มต้น | ความหมาย |
-|-----|------------|----------|
-| `CONF_THRES` | 0.30 | confidence threshold |
-| `IOU_THRES` | 0.45 | NMS IoU threshold |
-| `SAVE_COOLDOWN` | 3 วินาที | ความถี่บันทึกภาพ |
-
-**Logic:**
-
-```
-detect valve  →  บันทึกภาพไว้ใน captures/
-valve หาย    →  arm กลับ HOME position
-```
-
-### Calibrate servo — `servo_scan_pulse.py`
-
-```bash
-# แก้ CHANNEL = 0..5 ใน code ก่อนรัน
-python servo_scan_pulse.py
-```
-
-| ปุ่ม | pulse | ผล |
-|------|-------|----|
-| `1` | 600 µs | MIN |
-| `2` | 1500 µs | MID (90°) ← ใช้จัด horn |
-| `3` | 2500 µs | MAX |
-| `r` | 0 | relax |
-| `q` | — | ออก |
-
-รายละเอียดการประกอบ → [docs/home_position_setup.md](docs/home_position_setup.md)
+> ถ้า IK คืน None = พิกัดอยู่นอก workspace
 
 ---
 
-## Pipeline (`infer_cam_onnx.py`)
+## IK ใน Code
 
-```
-Camera (640×480 RGB)
-    │
-    ▼
-Letterbox → 640×640 + gray padding
-    │
-    ▼
-ONNX Inference  →  output (1, 5, 8400)
-    │               transpose → (8400, 5)
-    ▼
-Parse: cx, cy, w, h, conf
-    │
-    ▼
-Filter conf > 0.30  →  NMS (cv2.dnn.NMSBoxes)
-    │
-    ├─ found  →  วาด bbox, บันทึก captures/
-    └─ lost   →  arm.move_home()
+```python
+from ik_solver import solve_ik
+from servo_controller import ServoController
+
+arm = ServoController()
+arm.move_to_home()
+
+angles = solve_ik(300, 0, 150)   # x, y, z (mm)
+if angles:
+    arm.move_smooth(angles)
 ```
 
 ---
@@ -159,8 +137,7 @@ Filter conf > 0.30  →  NMS (cv2.dnn.NMSBoxes)
 
 | อาการ | วิธีแก้ |
 |-------|--------|
-| `ImportError: picamera2` | `sudo apt install python3-picamera2` |
-| กล้องไม่ติด | ทดสอบ `libcamera-hello` |
 | PCA9685 ไม่ตอบสนอง | `i2cdetect -y 1` ต้องเห็น `0x40` |
-| Servo กระตุกรุนแรง | ตรวจ pulse ไม่เกิน 500–2500 µs |
-| Model ไม่โหลด | ตรวจ `models/Valve_detection_model.onnx` มีอยู่จริง |
+| Servo กระตุกรุนแรง | ตรวจ pulse range 500–2500 µs ใน `config.py` |
+| IK คืน None | พิกัดนอก workspace หรือ joint limit เกิน |
+| แขนเบี้ยวหลัง calibrate | ปรับ `ZERO_OFFSET` ใน `config.py` |
