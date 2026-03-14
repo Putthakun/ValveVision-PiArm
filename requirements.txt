@@ -1,0 +1,7 @@
+numpy
+opencv-python-headless
+pillow
+onnxruntime
+scipy
+adafruit-blinka
+adafruit-circuitpython-pca9685

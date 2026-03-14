@@ -8,7 +8,7 @@ import busio
 from adafruit_pca9685 import PCA9685
 
 # ============ CONFIG ============
-CHANNEL = 4
+CHANNEL = 1
 FREQ = 50
 
 PULSE_MIN = 600
@@ -17,7 +17,6 @@ PULSE_MAX = 2500
 
 
 # ================================
-
 def us_to_duty_u16(us: float, freq: float) -> int:
     period_us = 1_000_000 / freq
     return int((us / period_us) * 65535)
