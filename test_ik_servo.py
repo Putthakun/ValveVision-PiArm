@@ -7,7 +7,7 @@
 #   พิมพ์  q     เพื่อออก
 
 from servo_controller import ServoController
-from ik_solver import solve_ik
+from ik_solver import solve_ik, solve_ik_clamped
 
 arm = ServoController()
 
@@ -42,15 +42,19 @@ while True:
         print("  ค่าต้องเป็นตัวเลข")
         continue
 
-    angles = solve_ik(x, y, z)
-    if angles is None:
-        print("  → IK หา solution ไม่ได้ (นอก workspace)")
-        continue
+    strict = solve_ik(x, y, z)
+    if strict:
+        angles = strict
+        mode = "exact"
+    else:
+        angles = solve_ik_clamped(x, y, z)
+        mode = "clamped (ยื่นสุดทิศทางนั้น)"
 
+    print(f"  [{mode}]")
     print(f"  J1={angles['J1']:.1f}  J2={angles['J2']:.1f}  "
           f"J3={angles['J3']:.1f}  J4={angles['J4']:.1f}")
     arm.move_smooth(angles)
-    print("  → เสร็จ วัดระยะปลาย gripper จากเป้าจริงว่าห่างกี่ mm")
+    print("  → เสร็จ")
 
 arm.move_to_home()
 print("home แล้ว ออก")

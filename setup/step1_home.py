@@ -4,6 +4,9 @@
 # วิธีใช้:
 #   python step1_home.py
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from adafruit_servokit import ServoKit
 from config import CHANNEL, PULSE_MIN, PULSE_MAX
 

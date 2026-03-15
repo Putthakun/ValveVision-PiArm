@@ -13,7 +13,8 @@
 #   s           ข้าม joint นี้ (ใช้ค่าเดิม)
 #   q           หยุดและแสดงผล
 
-import sys
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 import termios
 import tty

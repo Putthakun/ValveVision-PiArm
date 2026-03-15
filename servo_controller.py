@@ -1,7 +1,7 @@
 # servo_controller.py
 import time
 from adafruit_servokit import ServoKit
-from config import INVERT, ZERO_OFFSET, CHANNEL, LIMITS, HOME
+from config import INVERT, ZERO_OFFSET, CHANNEL, LIMITS, HOME, SCAN_POSE
 
 PULSE_MIN = 500   # µs
 PULSE_MAX = 2500  # µs
@@ -61,3 +61,7 @@ class ServoController:
     # ─── ท่าสำเร็จรูป ────────────────────────────────────────────────────
     def move_to_home(self, steps: int = 60, delay: float = 0.02):
         self.move_smooth(HOME, steps=steps, delay=delay)
+
+    def move_to_scan_pose(self, steps: int = 60, delay: float = 0.02):
+        self.move_smooth(SCAN_POSE, steps=steps, delay=delay)
+
