@@ -1,209 +1,457 @@
-# ValveVision-PiArm
+# ValveVision-PiArm — คู่มือการใช้งาน
 
-ระบบควบคุมแขนกล 6-DOF บน Raspberry Pi สำหรับยื่นปลาย gripper ไปยังพิกัด (x, y, z) ที่กำหนด
-เป้าหมายหลัก: รับพิกัด valve จากกล้อง แล้วให้แขนกลยื่นไปถึงโดยอัตโนมัติ
+## โปรเจ็คนี้คืออะไร?
+
+ValveVision-PiArm คือระบบ **แขนกล 6 แกน (6-DOF Robotic Arm)** ที่ทำงานบน Raspberry Pi โดยมีเป้าหมายคือ:
+
+1. **ตรวจจับวาล์ว** ด้วย Computer Vision (กล้อง + โมเดล AI)
+2. **คำนวณมุมข้อต่อ** ด้วย Inverse Kinematics (IK) — รับพิกัด (x, y, z) แล้วคำนวณว่าข้อต่อแต่ละจุดต้องหมุนกี่องศา
+3. **ขยับแขนกล** ไปยังตำแหน่งที่ตรวจจับได้ ผ่านการควบคุม Servo Motor 6 ตัว
+
+```
+กล้องตรวจจับวาล์ว → ได้พิกัด (x, y, z) → IK คำนวณมุม → Servo ขยับแขนกล
+```
+
+### โครงสร้างแขนกล
+
+```
+[J6 - Gripper/มือจับ]
+       |
+   L4 = 180 mm
+       |
+[J4 - Wrist Pitch/ข้อมือก้ม-เงย]
+       |
+   L3 = 135 mm
+       |
+[J3 - Elbow/ข้อศอก]
+       |
+   L2 = 50 mm
+       |
+[J2 - Shoulder/ไหล่]
+       |
+   L1 = 10 mm
+       |
+[J1 - Base/ฐาน — หมุนซ้าย-ขวา]
+```
+
+ระยะเอื้อมสูงสุดจาก J2 = L2 + L3 + L4 = **365 mm**
 
 ---
 
-## โครงสร้างโปรเจ็ค
+## โครงสร้างไฟล์
 
 ```
 ValveVision-PiArm/
-├── main.py                  ← pipeline หลัก (รันตัวนี้ตอนใช้งานจริง)
-├── config.py                ← ค่าคงที่ทั้งหมดของแขน
+│
+├── config.py                ← ★ ไฟล์หลัก: ค่าตั้งค่าทั้งหมดอยู่ที่นี่
+├── main.py                  ← จุดเริ่มต้นการทำงานจริง
 ├── ik_solver.py             ← คำนวณ Inverse Kinematics
-├── servo_controller.py      ← ควบคุม servo ผ่าน PCA9685
-├── test_ik_servo.py         ← ทดสอบพิมพ์พิกัดแล้วแขนเคลื่อน
-├── workspace_map.py         ← plot รูป workspace ของแขน
-└── setup/                   ← script สำหรับ calibrate (ใช้ครั้งเดียวตอน setup)
-    ├── step1_home.py
-    ├── step2_test_direction.py
-    ├── step3_calibrate_offsets.py
-    ├── set_scan_pose.py
-    └── servo_scan_pulse.py
+├── servo_controller.py      ← ควบคุม Servo Motor
+├── test_ik_servo.py         ← ทดสอบแบบ manual (ไม่ต้องใช้กล้อง)
+├── workspace_map.py         ← สร้างภาพแสดงพื้นที่ที่แขนกลเข้าถึงได้
+├── requirements.txt         ← Python packages ที่ต้องติดตั้ง
+│
+├── setup/                   ← สคริปต์ Calibrate (ทำครั้งเดียวตอนประกอบ)
+│   ├── step1_home.py              ← Step 1: จัดตำแหน่ง Horn ที่ 90°
+│   ├── step2_test_direction.py    ← Step 2: ทดสอบทิศทางหมุน
+│   ├── step3_calibrate_offsets.py ← Step 3: ปรับ Offset ละเอียด
+│   ├── set_scan_pose.py           ← Step 4: กำหนดท่ายืนรอสแกน
+│   └── servo_scan_pulse.py        ← ทดสอบ PWM ระดับ Hardware (ไม่ค่อยได้ใช้)
+│
+└── models/
+    ├── Valve_detection_model.onnx   ← โมเดล AI ตรวจจับวาล์ว (ONNX)
+    └── best_int8.tflite             ← โมเดล AI ตรวจจับวาล์ว (TFLite, เร็วกว่าบน RPi)
 ```
 
 ---
 
-## Hardware
+## Hardware ที่ใช้
 
 | อุปกรณ์ | รายละเอียด |
 |---------|-----------|
-| Raspberry Pi 4 | รัน Python 3 |
-| PCA9685 | Servo driver 16-channel (I2C) |
-| Servo x6 | pulse range 500–2500 µs |
+| Raspberry Pi 4 | รัน Python 3.11.9 |
+| PCA9685 | Servo driver 16-channel ต่อผ่าน I2C (SCL/SDA) |
+| Servo x6 | Standard RC Servo, pulse range 500–2500 µs |
 | แขนกล 6-DOF | โครงสร้าง 6 joint (J1–J6) |
 
-### Link Lengths
+---
 
+## ติดตั้ง Dependencies
+
+```bash
+pip install -r requirements.txt
 ```
-ฐาน [J1]
-  │  L1 = 10mm
- [J2]
-  │  L2 = 50mm
- [J3]
-  │  L3 = 135mm
- [J4]
-  │  L4 = 180mm
- ปลาย gripper
-```
+
+> Python version ที่ต้องใช้: **3.11.9**
 
 ---
 
-## ไฟล์และหน้าที่
+## ไฟล์ที่สำคัญที่สุด: `config.py`
 
-### `config.py` — ค่า configuration ทั้งหมด
+ไฟล์นี้คือ "หัวใจ" ของโปรเจ็ค — **ค่าทุกอย่างที่แก้ไขได้อยู่ที่นี่** ไฟล์อื่นๆ จะ import ค่าไปใช้ต่อ ไม่ต้องไปแก้ที่ไฟล์อื่น
 
-เก็บค่าคงที่ทุกอย่างของระบบ แก้ที่นี่ที่เดียว ไฟล์อื่น import ไปใช้
+### 1. ความยาวข้อต่อ (Link Lengths)
 
-| ตัวแปร | ความหมาย |
-|--------|---------|
-| `L1–L4` | ความยาว link แต่ละช่วง (mm) |
-| `CHANNEL` | mapping joint → PCA9685 channel |
-| `PULSE_MIN/MAX` | ขอบเขต pulse width ของ servo (µs) |
-| `INVERT` | กลับทิศ servo (True/False) ต่อ joint |
-| `ZERO_OFFSET` | offset เพื่อแก้ความคลาดเคลื่อนของ horn (องศา) |
-| `LIMITS` | ขอบเขตมุมที่อนุญาต ต่อ joint (องศา) |
-| `HOME` | ท่า home (ทุก joint = 90°) |
-| `SCAN_POSE` | ท่าเตรียมพร้อม ขณะกล้อง detect |
+```python
+L1 = 10    # ความสูงจากฐาน (J1) ถึงไหล่ (J2) — หน่วย: มิลลิเมตร
+L2 = 50    # ความยาวต้นแขน จาก J2 ถึง J3
+L3 = 135   # ความยาวปลายแขน จาก J3 ถึง J4
+L4 = 180   # ความยาวมือจับ จาก J4 ถึงปลาย Gripper
+```
+
+> **เมื่อไหร่ต้องแก้?** เมื่อประกอบแขนกลใหม่ที่มีขนาดต่างออกไป ต้องวัดจากของจริงแล้วแก้ค่าตรงนี้
 
 ---
+
+### 2. Channel PCA9685 (การเชื่อมต่อสาย)
+
+```python
+CHANNEL = {
+    'J1': 0,   # ข้อต่อ 1 (ฐาน) เชื่อมกับ Channel 0 บน PCA9685
+    'J2': 1,   # ข้อต่อ 2 (ไหล่) เชื่อมกับ Channel 1
+    'J3': 2,   # ข้อต่อ 3 (ศอก) เชื่อมกับ Channel 2
+    'J4': 3,   # ข้อต่อ 4 (ข้อมือ) เชื่อมกับ Channel 3
+    'J5': 4,   # ข้อต่อ 5 (หมุนมือ) เชื่อมกับ Channel 4
+    'J6': 5,   # ข้อต่อ 6 (Gripper) เชื่อมกับ Channel 5
+}
+```
+
+> **เมื่อไหร่ต้องแก้?** เมื่อเสียบสาย Servo ไปยัง Channel ของ PCA9685 ต่างจากนี้
+
+---
+
+### 3. ช่วง Pulse Width ของ Servo
+
+```python
+PULSE_MIN = 500    # Pulse สั้นสุด = มุม 0°  — หน่วย: ไมโครวินาที (µs)
+PULSE_MAX = 2500   # Pulse ยาวสุด = มุม 180°
+```
+
+> **เมื่อไหร่ต้องแก้?** เมื่อใช้ Servo รุ่นอื่นที่มีช่วง Pulse ต่างกัน ให้เช็คจาก Datasheet ของ Servo
+
+---
+
+### 4. INVERT — กลับทิศทางหมุน
+
+```python
+INVERT = {
+    'J1': False,  # False = หมุนปกติ
+    'J2': True,   # True = กลับทิศ (Servo ติดตั้งหันหลัง)
+    'J3': True,
+    'J4': False,
+    'J5': False,
+    'J6': False,
+}
+```
+
+**หลักการทำงาน:**
+- `False` → ส่งมุม 110° → Servo ไปที่ 110°
+- `True`  → ส่งมุม 110° → Servo จะได้รับ `180° - 110° = 70°` (กลับทิศ)
+
+> **เมื่อไหร่ต้องแก้?** หลังรัน `setup/step2_test_direction.py` แล้วเห็นว่า Servo หมุนสวนทิศที่ต้องการ → เปลี่ยน `False` เป็น `True` หรือกลับกัน
+
+---
+
+### 5. ZERO_OFFSET — ชดเชยความคลาดเคลื่อน
+
+```python
+ZERO_OFFSET = {
+    'J1': 0,   # ไม่ต้องปรับ
+    'J2': 0,
+    'J3': 7,   # ต้องบวก 7° เพราะ Horn ติดตั้งคลาดเคลื่อน
+    'J4': 7,
+    'J5': 0,
+    'J6': 0,
+}
+```
+
+**หลักการ:** แม้สั่ง 90° แต่แขนกลจริงอาจอยู่ที่ 83° เพราะ Horn ติดตั้งไม่ตรง → ใส่ `7` เพื่อชดเชยให้ตรง
+
+> **เมื่อไหร่ต้องแก้?** หลังรัน `setup/step3_calibrate_offsets.py` แล้วเห็นว่าแขนกลไม่ตรง 90° จริงๆ → คัดลอกค่าที่สคริปต์บอกมาใส่ตรงนี้
+
+---
+
+### 6. LIMITS — จำกัดมุมเพื่อความปลอดภัย
+
+```python
+LIMITS = {
+    'J1': (0, 180),   # J1 หมุนได้ 0° ถึง 180°
+    'J2': (0, 180),
+    'J3': (0, 180),
+    'J4': (0, 180),
+    'J5': (0, 180),
+    'J6': (0, 180),
+}
+```
+
+> **เมื่อไหร่ต้องแก้?** ถ้าแขนกลชนกันเองในบางท่า → แคบ Range ของข้อต่อนั้นลง เช่น `(30, 150)`
+
+---
+
+### 7. HOME — ท่าพัก (Neutral)
+
+```python
+HOME = {
+    'J1': 90,   # ทุกข้อต่ออยู่ที่ 90° = ท่าตั้งตรง
+    'J2': 90,
+    'J3': 90,
+    'J4': 90,
+    'J5': 90,
+    'J6': 90,
+}
+```
+
+> ท่านี้ใช้เป็นจุดเริ่มต้นและจุดพักระหว่างรอ ปรับได้ถ้าต้องการท่าพักอื่น
+
+---
+
+### 8. SCAN_POSE — ท่ารอสแกน
+
+```python
+SCAN_POSE = {
+    'J1': 90.0,    # หันหน้าตรง
+    'J2': 50.0,    # ไหล่ก้มลงเล็กน้อย
+    'J3': 180.0,   # ข้อศอกยืดเต็มที่
+    'J4': 180.0,   # ข้อมือชี้ลง
+    'J5': 90.0,
+    'J6': 90.0,
+}
+```
+
+> ท่านี้คือตำแหน่งที่กล้องมองเห็นวาล์วได้ดีที่สุด — ปรับด้วย `setup/set_scan_pose.py` แล้วสคริปต์จะบันทึกค่ากลับมาที่นี่เอง
+
+---
+
+### สรุปค่าทั้งหมดใน `config.py`
+
+| ค่า | ค่าปัจจุบัน | แก้เมื่อ |
+|-----|------------|---------|
+| `L1–L4` | 10, 50, 135, 180 mm | เปลี่ยนขนาดแขนกล |
+| `CHANNEL` | J1=0 … J6=5 | เสียบสายช่อง PCA9685 ต่างกัน |
+| `PULSE_MIN/MAX` | 500–2500 µs | เปลี่ยน Servo รุ่น |
+| `INVERT` | J2, J3 = True | ผลจาก step2 |
+| `ZERO_OFFSET` | J3, J4 = 7° | ผลจาก step3 |
+| `LIMITS` | ทุกข้อ 0–180° | ป้องกันแขนกลชนกัน |
+| `HOME` | ทุกข้อ = 90° | ท่าพัก |
+| `SCAN_POSE` | J2=50°, J3=180°… | ผลจาก set_scan_pose |
+
+---
+
+## ขั้นตอน Setup ครั้งแรก (ทำแค่ครั้งเดียวหลังประกอบแขนกล)
+
+ทำตามลำดับนี้:
+
+### Step 1: จัดตำแหน่ง Horn
+
+```bash
+python setup/step1_home.py
+```
+
+สคริปต์จะส่งสัญญาณ 90° ให้ Servo ทุกตัวแล้ว **ล็อกค้างไว้**
+
+**ทำต่อ:** สำหรับแต่ละข้อต่อ — ถ้า Horn (ชิ้นพลาสติกบนหัว Servo) ไม่ได้ตั้งตรงที่มุม 90° ให้:
+1. ถอดสกรูที่ยึด Horn
+2. ดึง Horn ออกจาก Servo
+3. จัดให้ตรงกับมุม 90°
+4. ใส่กลับและขันสกรู
+
+> **ทำไมต้องทำ:** Servo อิเล็กทรอนิกส์และ Horn กลไกต้องซิงค์กัน ถ้าไม่ตรง จะทำให้คำนวณมุมผิดตลอด
+
+---
+
+### Step 2: ทดสอบทิศทางหมุน
+
+```bash
+python setup/step2_test_direction.py
+```
+
+สคริปต์จะทดสอบทีละข้อต่อ โดยขยับจาก 90° → 110° → 90° แล้วถามว่า:
+
+```
+J1: ขยับไปทิศที่ถูกต้องไหม? (y/n):
+```
+
+- กด `y` → ทิศถูก → INVERT = False
+- กด `n` → ทิศผิด → INVERT = True
+
+**จากนั้น:** คัดลอกผลลัพธ์ `INVERT` ที่ได้ไปใส่ใน `config.py`
+
+---
+
+### Step 3: ปรับ Offset ละเอียด
+
+```bash
+python setup/step3_calibrate_offsets.py
+```
+
+สคริปต์จะทำทีละข้อต่อ ให้กดปุ่มเพื่อปรับจนแขนกลอยู่ตรง 90° จริงๆ เมื่อมองจากด้านข้าง:
+
+| ปุ่ม | ผล |
+|------|-----|
+| `+` | เพิ่ม offset ทีละ 1° |
+| `-` | ลด offset ทีละ 1° |
+| `>` | เพิ่ม 5° |
+| `<` | ลด 5° |
+| `Enter` | ยืนยันและไปข้อต่อถัดไป |
+| `s` | ข้ามข้อต่อนี้ (ใช้ค่าเดิม) |
+
+**จากนั้น:** คัดลอกผลลัพธ์ `ZERO_OFFSET` ที่ได้ไปใส่ใน `config.py`
+
+---
+
+### Step 4: กำหนดท่า Scan
+
+```bash
+python setup/set_scan_pose.py
+```
+
+ปรับท่าแขนกลจนกล้องมองเห็นพื้นที่วางวาล์วได้ดีที่สุด:
+
+| ปุ่ม | ผล |
+|------|-----|
+| `1` `2` `3` `4` | เลือกข้อต่อที่จะปรับ |
+| `+` / `-` | เพิ่ม/ลดมุม |
+| `[` `]` `\` | เปลี่ยน step size เป็น 1° / 5° / 10° |
+| `s` | บันทึกลง config.py อัตโนมัติ |
+| `q` | ออกโดยไม่บันทึก |
+
+---
+
+## การใช้งาน
+
+### ทดสอบด้วยพิกัด Manual (ไม่ต้องกล้อง)
+
+```bash
+python test_ik_servo.py
+```
+
+พิมพ์พิกัด `x y z` แล้ว Enter — แขนกลจะขยับไปตำแหน่งนั้น:
+
+```
+Enter coordinate (x y z) or 'home' or 'q': 300 0 150
+→ แขนกลขยับไปที่ x=300mm, y=0mm, z=150mm
+```
+
+คำสั่งพิเศษ:
+- `home` → กลับท่าพัก
+- `q` → ออกจากโปรแกรม
+
+> ใช้สำหรับทดสอบว่า IK และ Servo ทำงานถูกต้องก่อนเชื่อมกับกล้อง
+
+---
+
+### รันระบบจริง
+
+```bash
+python main.py
+```
+
+**ขั้นตอนการทำงาน:**
+```
+1. แขนกลขยับไปท่า Scan
+2. รอ Enter
+3. เรียก get_valve_position() → รับพิกัด (x, y, z)
+4. คำนวณ IK → ขยับแขนกลไปยังวาล์ว
+5. รอ Enter → กลับท่า Scan
+6. วนซ้ำ
+```
+
+> **หมายเหตุ:** ตอนนี้ `get_valve_position()` ยังเป็นค่า hardcode `(300, 0, 150)` — ต้องเชื่อมกับกล้องจริงก่อน (ดูหัวข้อ Camera Integration ด้านล่าง)
+
+---
+
+### ดูพื้นที่ที่แขนกลเข้าถึงได้
+
+```bash
+python workspace_map.py
+```
+
+สร้างไฟล์ `workspace.png` แสดงภาพตัดขวาง:
+- จุดสีน้ำเงิน = พื้นที่ที่แขนกลเข้าถึงได้
+- จุดสีเทา = พื้นที่นอกขอบเขต
+
+---
+
+## อธิบายไฟล์หลัก
 
 ### `ik_solver.py` — Inverse Kinematics
 
-**ทฤษฎี: Geometric Inverse Kinematics**
-
-IK คือการย้อนจาก "ต้องการให้ปลายแขนอยู่ที่ไหน" → "แต่ละ joint ต้องหมุนเท่าไหร่"
-
-#### ขั้นตอนการคำนวณ
-
-**1. J1 — หมุนฐาน (rotation around Z-axis)**
-```
-J1 = 90° + atan2(y, x)
-```
-J1 หมุนฐานให้แขนหันหน้าไปหา target เสมอ
-atan2 ให้มุมในระนาบ X-Y
-
-**2. แยกปัญหาเป็น 2D (ระนาบ r-z)**
-
-เมื่อรู้ทิศแล้ว ปัญหากลายเป็น 2D:
-```
-r = sqrt(x² + y²)   ← ระยะแนวนอน
-z                    ← ความสูง
-```
-
-**3. หาตำแหน่งข้อมือ (J4) — ถอย L4 ออกจากปลาย**
-
-กำหนด `gripper_pitch` = มุม gripper จากแนวนอน (0° = แนวนอน)
-```
-r_wrist = r - L4 x cos(gripper_pitch)
-z_wrist = z - L1 + L4 x sin(gripper_pitch)
-```
-
-**4. 2-Link IK สำหรับ J2, J3 → ข้อมือ**
-
-ใช้ Law of Cosines หา J3 ก่อน:
-```
-d       = sqrt(r_w² + z_w²)
-cos(a3) = (d² - L2² - L3²) / (2 x L2 x L3)
-a3_rel  = acos(cos(a3))
-
-phi = atan2(r_w, z_w)
-psi = atan2(L3 x sin(a3), L2 + L3 x cos(a3))
-a2  = phi - psi
-
-J2 = 90° + a2      (องศา)
-J3 = 90° + a3_rel
-```
-
-**5. J4 — ชดเชยให้ gripper อยู่ที่มุมที่ต้องการ**
-```
-J4 = 90° + (alpha4 - alpha3)
-```
-
-#### Workspace
-
-```
-sweet spot (ยืดหยุ่นที่สุด):
-  z=100mm → x ≈ 290–340mm
-  z=150mm → x ≈ 215–300mm
-  z=170mm → x ≈ 170–270mm
-```
-
-#### ฟังก์ชัน
+แปลงพิกัด (x, y, z) → มุมข้อต่อทุกตัว ด้วยคณิตศาสตร์เรขาคณิต
 
 | ฟังก์ชัน | พฤติกรรม |
 |---------|---------|
-| `solve_ik(x, y, z)` | คืน dict หรือ None ถ้าไม่ถึง |
-| `solve_ik_clamped(x, y, z)` | ยื่นสุด workspace ในทิศทางนั้น (ไม่มี None) |
-| `fk(j2, j3, j4)` | Forward Kinematics สำหรับตรวจสอบ |
+| `solve_ik(x, y, z)` | คืน dict มุมทุกข้อต่อ หรือ `None` ถ้าพิกัดอยู่นอกขอบเขต |
+| `solve_ik_clamped(x, y, z)` | คืนผลเสมอ โดยดึงมาที่จุดใกล้สุดถ้าเกินขอบเขต |
+| `fk(j2, j3, j4)` | Forward Kinematics — เอามุมมาหาพิกัด (ใช้ตรวจสอบ) |
+
+**Workspace ที่ใช้งานได้ดี:**
+```
+z=100mm → x ≈ 290–340mm
+z=150mm → x ≈ 215–300mm
+z=170mm → x ≈ 170–270mm
+```
 
 ---
 
 ### `servo_controller.py` — ควบคุม Servo
 
-**ทฤษฎี: PWM Servo Control + Logic Space Mapping**
-
-Servo รับ PWM signal ความกว้าง 500–2500 µs แปลงเป็นมุม 0–180°
-ระบบใช้ "logic angle" (space ของ IK) แยกจาก "servo angle" (physical)
-
-#### การแปลง logic → servo
-
-```
-servo_angle = logic_angle           (INVERT=False)
-servo_angle = 180 - logic_angle    (INVERT=True)
-servo_angle += ZERO_OFFSET
-servo_angle = clamp(0, 180)
-```
-
-**INVERT** — แก้ servo ที่ติดตั้งกลับด้าน
-**ZERO_OFFSET** — แก้ horn ที่ขันไม่ตรงพอดี
-
-#### Smooth Motion
-
-Linear interpolation ระหว่างตำแหน่งปัจจุบัน → target
-```
-angle(t) = current + (target - current) x t     t: 0→1
-```
+**Class:** `ServoController`
 
 | เมธอด | หน้าที่ |
 |-------|--------|
-| `set_joint(joint, angle)` | ส่ง angle ทันที |
-| `move_smooth(target_dict)` | เคลื่อนทุก joint พร้อมกันแบบ smooth |
-| `move_to_scan_pose()` | ไปท่า scan pose |
-| `move_to_home()` | ไปท่า home |
+| `set_joint(joint, angle)` | ส่งมุมทันที ไม่มี smooth |
+| `move_smooth(target_dict, steps=60, delay=0.02)` | เคลื่อนทุก joint พร้อมกันแบบ smooth (linear interpolation) |
+| `move_to_home()` | ไปท่า HOME แบบ smooth |
+| `move_to_scan_pose()` | ไปท่า SCAN_POSE แบบ smooth |
+
+**ค่า smooth motion:**
+- `steps=60` × `delay=0.02s` = ใช้เวลา ~1.2 วินาทีต่อการขยับ
+- ปรับได้ถ้าต้องการเร็ว/ช้ากว่านี้
 
 ---
 
 ### `main.py` — Pipeline หลัก
 
-**Flow การทำงาน:**
-```
-scan pose → detect valve → solve IK → ยื่นแขน → scan pose → loop
-```
+**จุดที่ต้องแก้เพื่อเชื่อมกล้อง:**
 
-**จุด swap สำหรับ integrate กล้อง:**
 ```python
 def get_valve_position():
-    # แทนด้วย camera detection ตรงนี้
-    return x, y, z    # หรือ None ถ้าไม่เจอ
+    # ปัจจุบัน: ค่า hardcode สำหรับทดสอบ
+    return 300, 0, 150
+
+    # ต้องเปลี่ยนเป็น:
+    # 1. เปิดกล้อง
+    # 2. รัน inference ด้วย models/Valve_detection_model.onnx
+    # 3. แปลงพิกัด pixel → mm (ต้อง calibrate กล้องก่อน)
+    # 4. return (x, y, z) หรือ None ถ้าตรวจไม่เจอ
 ```
+
+โมเดลที่มีพร้อมใช้:
+- `models/Valve_detection_model.onnx` — ใช้กับ `onnxruntime`
+- `models/best_int8.tflite` — ใช้กับ TensorFlow Lite (เร็วกว่าบน RPi)
 
 ---
 
-## ขั้นตอน Setup (ทำครั้งเดียว)
+## สรุปขั้นตอนทั้งหมด
+
+### Setup ครั้งแรก (ทำ 1 ครั้ง)
 
 ```bash
-python setup/step1_home.py            # จัด Horn ที่ 90°
-python setup/step2_test_direction.py  # หา INVERT flag
-python setup/step3_calibrate_offsets.py  # หา ZERO_OFFSET
-python setup/set_scan_pose.py         # จัดท่า scan pose
+python setup/step1_home.py               # จัด Horn ที่ 90°
+python setup/step2_test_direction.py     # หา INVERT → แก้ใน config.py
+python setup/step3_calibrate_offsets.py  # หา ZERO_OFFSET → แก้ใน config.py
+python setup/set_scan_pose.py            # จัดท่า scan pose → บันทึกใน config.py อัตโนมัติ
 ```
 
-## การใช้งาน
+### ทดสอบระบบ
 
 ```bash
-python test_ik_servo.py   # ทดสอบพิมพ์พิกัดเอง
-python main.py            # รัน pipeline จริง
-python workspace_map.py   # ดู workspace
+python test_ik_servo.py    # ทดสอบพิมพ์พิกัดเอง
+python workspace_map.py    # ดูว่าแขนกลเข้าถึงพื้นที่ไหนได้บ้าง
+```
+
+### รันจริง
+
+```bash
+python main.py             # รัน pipeline (หลังเชื่อมกล้องแล้ว)
 ```
