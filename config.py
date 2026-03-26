@@ -74,3 +74,13 @@ SCAN_POSE = {
 # z=100mm → x ≈ 290-340mm
 # z=150mm → x ≈ 215-300mm
 # z=170mm → x ≈ 170-270mm
+
+# ── Camera Calibration ─────────────────────────────────────────────────────
+CAM_X          = 180    # mm — กล้องห่าง J1 แนวนอน
+CAM_Y          = 0      # mm — กล้องอยู่แนวเดียวกับแขน
+CAM_Z          = 330    # mm — กล้องสูงกว่า J1
+CAM_TILT       = 12     # องศา — กล้องเอียงลงจากแนวนอน
+FOCAL_LENGTH   = 534    # px — recalibrated จาก actual position (x=320, z=360)
+VALVE_REAL_MM  = 12     # mm — ขนาด Schrader valve จริง
+IMAGE_W        = 1280   # px
+IMAGE_H        = 720    # px
