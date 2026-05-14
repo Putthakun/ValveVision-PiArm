@@ -8,11 +8,11 @@ import numpy as np
 import cv2
 import onnxruntime as ort
 
-MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "best.onnx")
+MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "best_v2.onnx")
 INPUT_SIZE  = 640
 CONF_THRESH = 0.10
 IOU_THRESH  = 0.45
-CLASS_NAMES = ["valve"]
+CLASS_NAMES = ["6541", "joob"]   # 6541 = valve body, joob = จุ๊บลม (air chuck)
 
 
 def load_model():
@@ -38,6 +38,8 @@ def letterbox(img_bgr, size=640):
 
 
 def preprocess(img_bgr):
+    if img_bgr.ndim == 3 and img_bgr.shape[2] == 4:
+        img_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGRA2BGR)
     lb, scale, pad_left, pad_top = letterbox(img_bgr, INPUT_SIZE)
     img = cv2.cvtColor(lb, cv2.COLOR_BGR2RGB)
     img = img.astype(np.float32) / 255.0

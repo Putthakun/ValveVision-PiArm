@@ -8,11 +8,12 @@
 
 from servo_controller import ServoController
 from ik_solver import solve_ik, solve_ik_clamped
+from config import SCAN_POSE
 
 arm = ServoController()
 
-print("กลับ Home ก่อน...")
-arm.move_to_home()
+print("กลับ Scan Pose ก่อน...")
+arm.move_to_scan_pose()
 print("พร้อม\n")
 
 print("พิมพ์พิกัด:  x y z   (mm)  เช่น  300 0 150")
@@ -27,8 +28,8 @@ while True:
         break
 
     if cmd.lower() == 'home':
-        arm.move_to_home()
-        print("  → home")
+        arm.move_to_scan_pose()
+        print("  → scan pose")
         continue
 
     parts = cmd.split()
@@ -56,5 +57,5 @@ while True:
     arm.move_smooth(angles)
     print("  → เสร็จ")
 
-arm.move_to_home()
-print("home แล้ว ออก")
+arm.move_to_scan_pose()
+print("scan pose แล้ว ออก")

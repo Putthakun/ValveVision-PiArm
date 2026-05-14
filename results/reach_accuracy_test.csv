@@ -1,0 +1,7 @@
+trial,valve_type,clock_pos,cmd_x,cmd_y,cmd_z,fk_x,fk_y,fk_z,pos_err_mm,gripper_angle_deg,valve_angle_deg,angle_err_deg,result,notes
+1,straight,7,390,-100,85,388,-98,87,2.8,0,0,0,hit,
+2,straight,7,390,-100,85,385,-104,82,5.1,0,0,0,hit,
+3,straight,8,373,-157,91,370,-160,88,4.2,0,0,0,hit,
+4,bent_45,7,390,-100,85,391,-99,84,1.4,0,45,45,miss,งอไม่ถึง
+5,bent_45,8,373,-157,91,375,-155,93,3.1,0,45,45,miss,
+6,straight,9,284,-134,212,280,-130,208,5.7,0,0,0,miss,นอก workspace
