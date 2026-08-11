@@ -7,7 +7,7 @@
 #   พิมพ์  q     เพื่อออก
 
 from servo_controller import ServoController
-from ik_solver import solve_ik, solve_ik_clamped
+from ik_solver import solve_ik
 from config import SCAN_POSE
 
 arm = ServoController()
@@ -43,15 +43,11 @@ while True:
         print("  ค่าต้องเป็นตัวเลข")
         continue
 
-    strict = solve_ik(x, y, z)
-    if strict:
-        angles = strict
-        mode = "exact"
-    else:
-        angles = solve_ik_clamped(x, y, z)
-        mode = "clamped (ยื่นสุดทิศทางนั้น)"
+    angles = solve_ik(x, y, z)
+    if angles is None:
+        print("  ✗ นอก workspace — ไม่สั่งแขน (ไม่มี clamp fallback แล้ว)")
+        continue
 
-    print(f"  [{mode}]")
     print(f"  J1={angles['J1']:.1f}  J2={angles['J2']:.1f}  "
           f"J3={angles['J3']:.1f}  J4={angles['J4']:.1f}")
     arm.move_smooth(angles)

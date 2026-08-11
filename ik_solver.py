@@ -72,64 +72,17 @@ def solve_ik(x: float, y: float, z: float, gripper_pitch: float = 0) -> dict | N
         return None
 
 
-def solve_ik_clamped(x: float, y: float, z: float, gripper_pitch: float = 0) -> dict:
-    """
-    เหมือน solve_ik แต่ถ้า target อยู่นอก workspace จะยื่นสุดขีดในทิศทางนั้นแทน
-    ไม่มีทาง return None — J1 ถูกทิศเสมอ ระยะถึงแค่ไหนเอาแค่นั้น
-    """
-    # ── J1: หมุนฐานถูกทิศเสมอ ────────────────────────────────────────
-    j1 = 90 + math.degrees(math.atan2(y, x))
-
-    r     = math.sqrt(x**2 + y**2)
-    z_adj = z - L1
-
-    beta   = math.radians(gripper_pitch)
-    alpha4 = math.pi / 2 + beta
-
-    r_w = r     - L4 * math.cos(beta)
-    z_w = z_adj + L4 * math.sin(beta)
-
-    # ── clamp ระยะข้อมือให้อยู่ใน [d_min, d_max] ─────────────────────
-    d     = math.sqrt(r_w**2 + z_w**2)
-    d_min = math.sqrt(L2**2 + L3**2)   # ~144mm — ข้อจำกัด J3 ≤ 180°
-    d_max = L2 + L3                     # 185mm  — แขนเหยียดสุด
-
-    if d > 1e-6:
-        if d > d_max:
-            r_w, z_w = r_w * d_max / d, z_w * d_max / d
-        elif d < d_min:
-            r_w, z_w = r_w * d_min / d, z_w * d_min / d
-    else:
-        # target ตรงแกน J1 พอดี — ยื่นตรงขึ้นบน
-        r_w, z_w = 0.0, d_min
-
-    d_c = math.sqrt(r_w**2 + z_w**2)
-
-    # ── 2-link IK (guaranteed solution หลัง clamp) ───────────────────
-    cos_a3 = (d_c**2 - L2**2 - L3**2) / (2 * L2 * L3)
-    cos_a3 = max(-1.0, min(1.0, cos_a3))
-    a3_rel = math.acos(cos_a3)
-
-    phi = math.atan2(r_w, z_w)
-    psi = math.atan2(L3 * math.sin(a3_rel), L2 + L3 * math.cos(a3_rel))
-    a2  = phi - psi
-
-    j2 = math.degrees(math.pi / 2 + a2)
-    j3 = math.degrees(a3_rel) + 90
-
-    alpha3 = a2 + a3_rel
-    j4     = math.degrees(math.pi / 2 + alpha4 - alpha3)
-
-    # ── clamp J2, J4 ถึงขีดจำกัด servo ──────────────────────────────
-    for joint, val in [('J2', j2), ('J4', j4)]:
-        lo, hi = LIMITS[joint]
-        if not (lo <= val <= hi):
-            pass  # clamp ด้านล่าง
-
-    j2 = max(LIMITS['J2'][0], min(LIMITS['J2'][1], j2))
-    j4 = max(LIMITS['J4'][0], min(LIMITS['J4'][1], j4))
-
-    return {'J1': j1, 'J2': j2, 'J3': j3, 'J4': j4, 'J5': 90, 'J6': 90}
+# ─────────────────────────────────────────────────────────────────────────
+#  solve_ik_clamped() ถูกลบออกแล้ว (rebuild 2026-08-11)
+#
+#  มันไม่เคย return None — target นอก workspace จะถูก clamp ให้แขนยื่นไป
+#  "ที่ไหนสักแห่ง" เงียบๆ แล้ว caller ไม่มีทางรู้ว่าไปไม่ถึงเป้า
+#  pipeline เก่าใช้ตัวนี้ทุกจุด จึงไม่มี failure signal เลยทั้งระบบ
+#
+#  ถ้าต้องการพฤติกรรม "ยื่นให้ใกล้ที่สุดเท่าที่ทำได้" ให้เขียนใหม่เป็น
+#  ฟังก์ชันที่คืน (angles, reached: bool, residual_mm: float)
+#  เพื่อให้ caller ตัดสินใจได้ว่าจะเดินหน้าต่อหรือยกเลิก
+# ─────────────────────────────────────────────────────────────────────────
 
 
 def fk(j2_deg: float, j3_deg: float, j4_deg: float) -> tuple[float, float]:
@@ -152,26 +105,25 @@ def fk(j2_deg: float, j3_deg: float, j4_deg: float) -> tuple[float, float]:
 
 
 if __name__ == '__main__':
-    # targets ปกติ + targets นอก workspace เพื่อทดสอบ clamped
+    # targets ปกติ + targets นอก workspace — ต้องได้ None เท่านั้น ไม่ clamp
     targets = [
-        (330,   0, 100),   # ✅ ใน workspace
-        (300,   0, 150),   # ✅ ใน workspace
-        (250,   0, 100),   # ❌ ใกล้เกิน
-        (200,   0, 500),   # ❌ สูงเกิน (ล้อรถใหญ่)
-        (400,   0, 150),   # ❌ ไกลเกิน
-        (280,  80, 130),   # ✅ ใน workspace มี y
-        (280, -80, 600),   # ❌ นอก workspace มี y
+        (330,   0, 100),   # คาดว่าถึง
+        (300,   0, 150),   # คาดว่าถึง
+        (250,   0, 100),   # คาดว่าใกล้เกิน
+        (200,   0, 500),   # คาดว่าสูงเกิน (ล้อรถใหญ่)
+        (400,   0, 150),   # คาดว่าไกลเกิน
+        (280,  80, 130),   # คาดว่าถึง (มี y)
+        (280, -80, 600),   # คาดว่านอก workspace (มี y)
     ]
 
     print(f"\n{'─'*80}")
-    print(f"{'Target':>18} | {'mode':>8} | {'J1':>6} {'J2':>6} {'J3':>6} {'J4':>6}")
+    print(f"{'Target':>18} | {'result':>12} | {'J1':>6} {'J2':>6} {'J3':>6} {'J4':>6}")
     print(f"{'─'*80}")
 
     for tx, ty, tz in targets:
-        strict  = solve_ik(tx, ty, tz)
-        clamped = solve_ik_clamped(tx, ty, tz)
-
-        tag = "✅ exact " if strict else "⚠️ clamp"
-        r = strict if strict else clamped
-        print(f"({tx:4},{ty:4},{tz:4}) | {tag} | "
-              f"{r['J1']:6.1f} {r['J2']:6.1f} {r['J3']:6.1f} {r['J4']:6.1f}")
+        a = solve_ik(tx, ty, tz)
+        if a is None:
+            print(f"({tx:4},{ty:4},{tz:4}) | {'UNREACHABLE':>12} |")
+        else:
+            print(f"({tx:4},{ty:4},{tz:4}) | {'reachable':>12} | "
+                  f"{a['J1']:6.1f} {a['J2']:6.1f} {a['J3']:6.1f} {a['J4']:6.1f}")
