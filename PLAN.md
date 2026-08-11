@@ -1,0 +1,1102 @@
+# ValveVision-PiArm — แผนการทำงาน (rebuild 2026-08)
+
+**เป้าหมาย:** ระบบที่ตรวจจับก้านจุ๊บบนล้อกะทะด้วยกล้อง แล้วสั่งแขนกล 6 แกนยื่นไปแตะได้สำเร็จอย่างน้อย 90% พร้อมตัวเลขความแม่นและความเที่ยงสำหรับรายงาน
+
+**สถาปัตยกรรม:** สองเฟส — เฟสหยาบใช้กล้องตรึงคิดเป็นมิลลิเมตรพาแขนเข้าใกล้ เฟสละเอียดใช้กล้องบนแขนคิดเป็นพิกเซลวนแก้จนเข้าเป้า แล้วเดินตรงเข้าไปแตะในระยะที่กล้องโฟกัสไม่ได้
+
+**เทคโนโลยี:** Python 3.11.9, ONNX Runtime, OpenCV, YOLO11n, picamera2, adafruit-servokit (PCA9685), Raspberry Pi 4
+
+**อ่านก่อน:** [CONTEXT.md](./CONTEXT.md) คำศัพท์ · [DESIGN.md](./DESIGN.md) เหตุผลเบื้องหลังทุกการตัดสินใจ
+
+---
+
+## ข้อกำหนดที่ใช้กับทุกงาน
+
+คัดมาจาก `CLAUDE.md` — ผิดข้อใดข้อหนึ่งถือว่างานนั้นไม่ผ่าน
+
+1. ห้ามใส่ค่าชดเชยแบบ magic constant ลง `config.py`
+2. `solve_ik` ต้องคืน `None` เมื่อเป้านอกพื้นที่ทำงาน ห้ามมีเวอร์ชัน clamp
+3. เฟสละเอียดคิดเป็นพิกเซลเท่านั้น ห้ามมีสูตรแปลง pixel→mm ในลูป
+4. ทุกคำสั่งไปยัง servo ต้องผ่าน `arm.py`
+5. ห้ามค้างแขนดันของแข็ง แตะแล้วถอยทันที
+6. คอมเมนต์และข้อความที่ผู้ใช้เห็นเป็นภาษาไทย
+7. ทุกโมดูลยกเว้น `servo_controller.py` ต้อง import ได้บน Mac (ไม่มีฮาร์ดแวร์)
+
+---
+
+## ตารางเวลา
+
+| Phase | สัปดาห์ | ผลลัพธ์ |
+|---|---|---|
+| 0 — วัดฮาร์ดแวร์ + วางโครง | 1–2 | รู้ขีดจำกัดจริง มี `arm.py` + `camera.py` ที่รันบน Mac ได้ |
+| 1 — Dataset + โมเดล | 3–6 | โมเดลที่เจอวาล์วได้ทั้งระยะไกลและใกล้ |
+| 2 — Pipeline | 7–10 | ระบบทำงานครบวงจร แตะได้จริง |
+| 3 — วัดผล + รายงาน | 11–13 | ตารางตัวเลขสำหรับเล่มและสไลด์ |
+| กันเหนียว | 14–16 | แก้สิ่งที่พัง ซ้อมเดโม่ |
+
+**เส้นตาย 8 สัปดาห์:** ตัด Phase 3 เหลือแค่วัดผล 20 ครั้ง และข้าม dataset รอบที่ 2
+
+---
+
+# Design แต่ละส่วน
+
+## D1 — โครงสร้างแขนกลและจลนศาสตร์
+
+**สิ่งที่รู้แล้ว:** แขนเป็นแบบ serial (ยืนยันแล้ว) → `ik_solver.solve_ik` ใช้โมเดลถูกต้อง
+
+**สิ่งที่ยังไม่รู้และต้องวัด:**
+
+| ค่า | ตอนนี้ใน `config.py` | ปัญหา |
+|---|---|---|
+| `L1` J1→J2 | 10 มม. | README เก่าที่ลบไปเขียนไว้ต่างกัน ต้องวัดใหม่ |
+| `L2` J2→J3 | 105 มม. | README เก่าเขียน 50 — ต่างกัน 2 เท่า |
+| `L3` J3→J4 | 140 มม. | README เก่าเขียน 135 |
+| `L4` J4→ปลาย | 175 มม. | README เก่าเขียน 180 |
+| `LIMITS` | (0,180) ทุกแกน | เป็นขีดจำกัด **servo** ไม่ใช่ **โครงแขน** |
+
+**วิธีวัด `L1`–`L4`:** วัดจาก**แกนหมุนถึงแกนหมุน** ไม่ใช่จากขอบชิ้นส่วน จัดแขนให้เหยียดตรงขึ้น (ทุกแกน 90°) แล้ววัดด้วยไม้บรรทัดเหล็ก ทำ 3 ครั้งเอาค่าเฉลี่ย
+`L4` วัดจากแกน J4 ถึง**จุดที่จะใช้แตะจริง** (ปลายสุดของ gripper) — จุดนี้คือ TCP
+
+**วิธีหา `LIMITS` จริง:** ขยับทีละแกน ทีละ 5° จาก 90° ไปทั้งสองทาง จนเห็นว่าชิ้นส่วนเริ่มชนกัน แล้วถอยกลับมา 10° เป็นระยะปลอดภัย
+
+**ระบบพิกัดที่ `arm.py` จะใช้: ทรงกระบอก `(r, theta, z, pitch)`**
+ไม่ใช่ `(x, y, z)` เพราะการแก้ของเฟสละเอียดเป็น "หมุน J1 นิดหน่อย" กับ "ยกสูงขึ้นนิดหน่อย" ซึ่งตรงกับ `theta` และ `z` พอดี — แปลงเป็น `x, y` ตอนเรียก `solve_ik` เท่านั้น
+
+**การเลือก `pitch`:** วน −60° ถึง +60° ทีละ 5° เรียก `solve_ik` เก็บเฉพาะค่าที่แก้ได้ แล้วเลือกค่าที่ทำให้ `min(ระยะเหลือถึงขีดจำกัดของทุก joint)` มากที่สุด
+
+---
+
+## D2 — กล้องและการติดตั้ง
+
+| | กล้องภาพรวม | กล้องที่มือ |
+|---|---|---|
+| รุ่น | Logitech Brio 100 (USB) | Pi Camera Module 3 |
+| ติดที่ | ตรึงกับที่ | บนแขน หลัง gripper |
+| เข้าถึงผ่าน | V4L2 path แบบ by-id | picamera2 |
+| ความละเอียด | 1280×720 | 1280×720 |
+| ใช้ในเฟส | หยาบ | ละเอียด |
+
+**ต้องใช้ path แบบ by-id เสมอ** (`/dev/v4l/by-id/usb-046d_Brio_100_...`) ไม่ใช่ `/dev/video0` เพราะเลข video เปลี่ยนได้ทุกครั้งที่รีบูต
+
+**เรื่องที่ต้องระวังทางกายภาพ:** สายแพ CSI ของกล้องที่มือจะล้าและขาดจากการงอซ้ำๆ ต้องเผื่อความยาว ทำจุดยึดกันดึง และมีสายสำรองก่อนวันสอบ
+
+**คลาส `ReplayCamera`** อ่านภาพจากโฟลเดอร์แทนกล้องจริง — เป็นหัวใจของโหมดจำลอง ทำให้ทดสอบ pipeline ทั้งเส้นบน Mac ได้ด้วยภาพที่บันทึกไว้
+
+---
+
+## D3 — Dataset และโมเดล
+
+### จะเทรนด้วยภาพแบบไหน
+
+**หลักการเดียว: ภาพต้องมาจากกล้องตัวเดียวกัน มุมเดียวกับตอนใช้งานจริง** — บทเรียนจากรอบที่แล้วที่ถ่ายด้วย iPhone แล้วใช้กับ webcam ไม่ได้
+
+### องค์ประกอบที่ต้องกวาดให้ครบ
+
+| มิติ | ค่าที่ต้องมี | ใครทำ |
+|---|---|---|
+| ตำแหน่งนาฬิกาของวาล์ว | 5 ค่า: 5, 6, 7, 8, 9 นาฬิกา | คนหมุนล้อ |
+| สภาพแสง | 4 แบบ: กลางวัน / ไฟห้อง / ไฟสลัว / ไฟฉายส่อง | คนสลับไฟ |
+| มุมมองและระยะ | 25 ท่าแขนต่อฉาก | แขนกวาดเอง |
+| ภาพเบลอ | ถ่ายระหว่างแขนกำลังขยับด้วย | สคริปต์ |
+| ภาพลบ | รูระบายอากาศ น็อตล้อ แบบไม่มีวาล์ว | ได้มาฟรีจากท่าที่เล็งไม่โดน |
+
+### จำนวนภาพ
+
+```
+รอบที่ 1 — กวาด grid
+  5 ตำแหน่งนาฬิกา × 4 สภาพแสง          = 20 รอบการเก็บ
+  แต่ละรอบ: 25 ท่าแขน × 2 กล้อง         = 50 ภาพ
+                                          ─────────────
+                                          1,000 ภาพดิบ
+
+  label ด้วยมือ 150 ภาพ (คละกล้อง คละแสง คละรอบ) → เทรนโมเดลหยาบ
+
+รอบที่ 2 — บันทึกจากการรันจริง
+  15 ครั้ง × ~30 เฟรมต่อครั้ง            = ~450 ภาพ
+  ★ ภาพชุดนี้ตรงกับสิ่งที่ระบบเจอจริงที่สุด เพราะมาจากการรันจริง
+  ให้โมเดลหยาบทำนายกรอบล่วงหน้า แล้วไล่แก้ (เร็วกว่า label เองราว 3 เท่า)
+
+รวมที่ label แล้ว: ~800–1,000 ภาพ  (มีวาล์ว ~65%, ภาพลบ ~35%)
+```
+
+**ทำไม 800–1,000 พอ:** เป็นการตรวจจับ class เดียว วัตถุเดียว บนล้อวงเดียว ฉากล็อกไว้แล้ว งานลักษณะนี้ไม่ต้องใช้เป็นหมื่นภาพ ถ้าเก็บครบ 6 มิติข้างบน
+
+### การแบ่ง train / val
+
+**แบ่งตามรอบการเก็บ ห้ามสุ่มแบ่งรายภาพ**
+
+```
+20 รอบ  →  train: 16 รอบ
+           val:    4 รอบ  ← เลือกให้มี "สภาพแสงที่ไม่เคยเห็น" และ
+                             "ตำแหน่งนาฬิกาที่ไม่เคยเห็น" อย่างน้อยอย่างละ 1 รอบ
+```
+
+เหตุผล: เฟรมที่ติดกันเกือบเหมือนกัน ถ้าสุ่มแบ่ง ภาพแทบเดียวกันจะไปอยู่ทั้งสองฝั่ง เหมือนทำข้อสอบที่เคยเห็นเฉลย ตัวเลขจะสวยแต่ใช้จริงพัง — และกรรมการสายนี้จะถามข้อนี้พอดี
+
+### พารามิเตอร์การเทรน
+
+| | รอบที่ 1 (bootstrap) | รอบที่ 2 (ตัวจริง) |
+|---|---|---|
+| โมเดลตั้งต้น | `yolo11n.pt` | `yolo11n.pt` |
+| ขนาดภาพ | 640 | 640 |
+| epochs | 100 | 150 |
+| batch | 16 | 16 |
+| เทรนที่ไหน | Google Colab (T4 ฟรี) | เดียวกัน |
+| เวลาโดยประมาณ | ~20 นาที | ~45 นาที |
+
+**การ augment — ปรับจากค่าเริ่มต้น 2 ตัว:**
+- `degrees=5` (ค่าเริ่มต้น 0, แต่ห้ามตั้งสูง) — J5 ถูกตรึงที่ 90° กล้องจึงไม่หมุนรอบแกนตัวเอง ภาพเอียงมากๆ ไม่เกิดขึ้นจริง สอนไปก็เปล่าประโยชน์
+- `close_mosaic=15` — ปิด mosaic ใน 15 epoch สุดท้าย ให้โมเดลเห็นภาพจริงล้วนก่อนจบ
+
+ที่เหลือใช้ค่าเริ่มต้น `fliplr=0.5`, `scale=0.5`, `hsv_v=0.4` ได้
+
+**เตือน:** อย่าใช้ augment แทนการเก็บภาพแสงจริง — `hsv_v` จำลองความสว่างได้ แต่จำลองเงา สะท้อน และ noise ตอนแสงน้อยไม่ได้
+
+### เกณฑ์ผ่าน
+
+| ตัวชี้วัด | เกณฑ์ | ทำไม |
+|---|---|---|
+| mAP50 บน 4 รอบที่กันไว้ | ≥ 0.85 | ตัวเลขรวมสำหรับรายงาน |
+| **recall ที่ระยะ 12–20 ซม.** | **≥ 0.95** | **สำคัญที่สุด** — เฟสละเอียดหาไม่เจอแม้ครั้งเดียวคือลูปหยุด |
+| false positive บนภาพลบ | ≤ 5% | กันแขนพุ่งไปแตะรูระบายอากาศ |
+
+`CONF_THRESH` ปัจจุบันคือ 0.10 ซึ่งต่ำมาก (รับแทบทุกอย่าง) — หลังเทรนใหม่ต้องหาค่าที่เหมาะจากกราฟ precision-recall แล้วแก้ใน `valve_detector.py`
+
+---
+
+## D4 — โครงสร้างโค้ด
+
+```
+config.py             ค่าฮาร์ดแวร์เท่านั้น                        [มีอยู่ ปรับ]
+servo_controller.py   คุม servo ผ่าน PCA9685                     [มีอยู่ ปรับ]
+ik_solver.py          คณิตศาสตร์ล้วน                              [มีอยู่ ใช้ได้]
+valve_detector.py     อนุมานผลโมเดล                               [มีอยู่ ปรับ]
+
+camera.py             กล้อง 3 แบบ หน้าตาเรียกใช้เหมือนกัน          [ใหม่]
+arm.py                IK + servo + ความปลอดภัย + เลือก pitch      [ใหม่]
+coarse.py             เฟสหยาบ                                     [ใหม่]
+fine.py               เฟสละเอียด                                  [ใหม่]
+run.py                state machine                               [ใหม่]
+
+tools/find_joint_limits.py     หาขีดจำกัดจริงของแต่ละแกน
+tools/collect_dataset.py       แขนกวาดเก็บภาพอัตโนมัติ
+tools/record_run.py            บันทึกทุกเฟรมระหว่างรันจริง
+tools/prelabel.py              ให้โมเดลทำนายกรอบล่วงหน้า
+tools/measure_pixel_scale.py   วัดอัตราส่วน pixel → องศา/มม.
+tools/measure_repeatability.py วัดความเที่ยงของแขน
+```
+
+**ความปลอดภัยอยู่ใน `arm.py` ที่เดียว** ทุกคำสั่งผ่านชั้นนี้ ไม่มีทางลัด ต่อให้ `fine.py` เขียนผิดก็สั่งแขนพังไม่ได้
+
+---
+
+## D5 — การวัดผลสำหรับรายงาน
+
+**การทดลองที่ 1 — ความเที่ยงของแขน (ไม่แตะล้อเลย)**
+สั่งแขนไปพิกัดเดิม 20 ครั้ง กลับท่าสแกนระหว่างครั้ง ถ่ายภาพจากกล้องภาพรวมทุกครั้ง วัดว่าปลายแขนเลื่อนกี่พิกเซล
+ใช้เครื่องหมายสีสดติดที่ปลายแขนเป็นจุดอ้างอิง **ไม่ใช้ template matching กับตัวแขน** ซึ่งเป็นวิธีที่พังในการทดลองรอบก่อน
+
+**การทดลองที่ 2 — ความเที่ยงของการจัดฉาก**
+ยกล้อออกแล้ววางกลับตามเส้นมาร์ค 10 ครั้ง วัดว่าวาล์วเลื่อนกี่มิลลิเมตรในภาพ
+
+**การทดลองที่ 3 — ความแม่นแบบครบวงจร**
+ติดกระดาษเป้าวงกลมซ้อนกัน (วงละ 5 มม.) รอบก้านจุ๊บ ทาสีที่ปลายแขน รัน pipeline เต็ม 20 ครั้ง
+- **ความแม่น** = ระยะจากศูนย์กลางกลุ่มจุดถึงศูนย์กลางเป้า → แก้ด้วย calibration ได้
+- **ความเที่ยง** = การกระจายของจุด → แก้ด้วยซอฟต์แวร์ไม่ได้
+
+**การทดลองที่ 4 — อัตราสำเร็จแยกตามเงื่อนไข**
+ตาราง: 5 ตำแหน่งนาฬิกา × 3 สภาพแสง × 3 ครั้ง = 45 รอบ บันทึกสำเร็จ/ล้มเหลว + สาเหตุที่ล้มเหลว
+
+---
+
+# Tasks
+
+---
+
+### Task 1: หาขีดจำกัดจริงของแต่ละแกน
+
+**ทำไมต้องทำก่อนเพื่อน:** ตัวเลข workspace ทั้งหมดใน `DESIGN.md` คำนวณจาก `LIMITS = (0,180)` ซึ่งเป็นขีดจำกัดของ servo ไม่ใช่ของโครงแขน ถ้าค่าจริงแคบกว่านี้ แผนทั้งหมดต้องคำนวณใหม่ — และท่าที่ระบบคิดว่า "ทำได้" อาจเป็นท่าที่แขนชนตัวเองพัง
+
+**Files:**
+- Create: `tools/find_joint_limits.py`
+- Modify: `config.py` (ค่า `LIMITS`)
+
+**Interfaces:**
+- Consumes: `servo_controller.ServoController`, `config.CHANNEL`
+- Produces: ค่า `LIMITS` ที่วัดจริง — ทุก task หลังจากนี้พึ่งพาค่านี้
+
+- [ ] **Step 1: เขียน `tools/find_joint_limits.py`**
+
+สคริปต์แบบโต้ตอบ: เลือกแกน → กด `+`/`-` ขยับทีละ 1° → กด `[` `]` เปลี่ยนขนาดก้าวเป็น 5° → กด `l` บันทึกขีดล่าง → กด `u` บันทึกขีดบน → กด `n` ไปแกนถัดไป
+รูปแบบการรับปุ่มลอกจาก `setup/step3_calibrate_offsets.py` ที่มีอยู่แล้ว (ใช้ `termios` + `tty`)
+เมื่อจบต้องพิมพ์ dict ที่ก๊อปวางลง `config.py` ได้ทันที และ**หักระยะปลอดภัย 10° เข้ามาจากจุดที่ชนจริงโดยอัตโนมัติ**
+
+- [ ] **Step 2: รันบน Pi แล้ววัดทีละแกน**
+
+```bash
+ssh pi@<tailscale-host> 'cd ~/ValveVision-PiArm && python tools/find_joint_limits.py'
+```
+
+ทำ J1 → J2 → J3 → J4 (J5, J6 ไม่ใช้ ปล่อยไว้ (0,180))
+**ขยับช้าๆ ทีละ 1° เมื่อใกล้จุดชน** — ฟังเสียง servo ถ้าเริ่มครางแปลว่าฝืนแล้ว ให้หยุดทันที
+
+- [ ] **Step 3: ก๊อปค่าลง `config.py`**
+
+- [ ] **Step 4: คำนวณ workspace ใหม่ด้วยค่าจริง**
+
+```bash
+python3 -c "
+import io,contextlib; from ik_solver import solve_ik
+s=io.StringIO()
+for z in range(40,281,20):
+    ok=[r/10 for r in range(0,4501) for p in [0]
+        if (lambda: (contextlib.redirect_stdout(s).__enter__(), solve_ik(r/10,0.0,float(z),p))[1])()]
+    print(z, (min(ok),max(ok)) if ok else 'เอื้อมไม่ถึง')
+"
+```
+
+- [ ] **Step 5: อัปเดตตารางใน `DESIGN.md` หัวข้อ 5 ด้วยตัวเลขจริง แล้ว commit**
+
+```bash
+git add config.py tools/find_joint_limits.py DESIGN.md
+git commit -m "feat: วัดขีดจำกัดจริงของแต่ละแกนแล้วอัปเดต workspace"
+```
+
+**เกณฑ์ผ่าน:** ทุกแกนมีขีดจำกัดที่วัดจากของจริง และมีตาราง workspace ที่คำนวณจากค่านั้น
+
+---
+
+### Task 2: วัดความยาวท่อนแขนใหม่
+
+**ทำไม:** `config.py` กับ README เก่าที่ลบไปไม่ตรงกันเลย — `L2` ต่างกัน 2 เท่า (105 vs 50) อย่างน้อยหนึ่งชุดผิด และค่านี้เข้าสมการ IK ทุกครั้ง
+
+**Files:**
+- Modify: `config.py` (`L1`–`L4`)
+
+- [ ] **Step 1: จัดแขนให้ตั้งตรง**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python setup/step1_home.py'
+```
+
+- [ ] **Step 2: วัดจากแกนหมุนถึงแกนหมุน 3 ครั้ง เอาค่าเฉลี่ย**
+
+`L1` = ฐาน(J1) → แกนไหล่(J2) · `L2` = J2 → J3 · `L3` = J3 → J4 · `L4` = J4 → **ปลายสุดของ gripper ที่จะใช้แตะ**
+วัดที่**แกนหมุน** ไม่ใช่ขอบชิ้นส่วน — จุดที่น็อตทะลุผ่านคือแกน
+
+- [ ] **Step 3: ตรวจสอบด้วย forward kinematics**
+
+```bash
+python3 -c "from ik_solver import fk; print('ท่าตั้งตรงควรได้ r≈0:', fk(90,90,90))"
+```
+ค่า `z` ที่ได้ต้องเท่ากับ `L1+L2+L3+L4` และ `r` ต้องใกล้ 0
+เอาไม้บรรทัดวัดความสูงปลาย gripper จากฐานจริง เทียบกับตัวเลขนี้ **ต่างกันเกิน 10 มม. = วัดผิด ให้วัดใหม่**
+
+- [ ] **Step 4: commit**
+
+```bash
+git add config.py && git commit -m "fix: วัดความยาวท่อนแขนใหม่จากของจริง"
+```
+
+**เกณฑ์ผ่าน:** ความสูงที่ FK คำนวณกับที่วัดด้วยไม้บรรทัด ต่างกันไม่เกิน 10 มม.
+
+---
+
+### Task 3: `arm.py` — ชั้นความปลอดภัยและโหมดจำลอง
+
+**Files:**
+- Create: `arm.py`, `tests/test_arm.py`
+- Modify: `servo_controller.py` (ให้ import ล้มเหลวได้โดยไม่ crash)
+
+**Interfaces:**
+- Consumes: `ik_solver.solve_ik(x,y,z,gripper_pitch) -> dict|None`, `config.LIMITS`, `servo_controller.ServoController`
+- Produces:
+```python
+class Arm:
+    def __init__(self, simulate: bool | None = None) -> None
+    def best_pitch(self, r: float, theta_deg: float, z: float) -> float | None
+    def move_to(self, r: float, theta_deg: float, z: float, pitch_deg: float) -> bool
+    def nudge(self, d_theta_deg: float, d_z: float) -> bool
+    def current(self) -> tuple[float, float, float, float]   # r, theta_deg, z, pitch_deg
+    def go_scan_pose(self) -> None
+    def retreat(self) -> None
+```
+`move_to` และ `nudge` คืน `False` เมื่อถูกชั้นความปลอดภัยปฏิเสธ — **ห้ามโยน exception** เพราะเป็นเหตุการณ์ปกติที่ผู้เรียกต้องจัดการ
+
+- [ ] **Step 1: เขียน test ที่ต้องล้มเหลวก่อน**
+
+```python
+# tests/test_arm.py
+from arm import Arm
+
+def test_ปฏิเสธเป้าที่เอื้อมไม่ถึง():
+    arm = Arm(simulate=True)
+    assert arm.move_to(r=900, theta_deg=90, z=100, pitch_deg=0) is False
+
+def test_ปฏิเสธเป้าที่ยื่นเกินขีดสูงสุด():
+    arm = Arm(simulate=True)
+    assert arm.move_to(r=460, theta_deg=90, z=100, pitch_deg=0) is False
+
+def test_เลือก_pitch_ที่เหลือระยะขยับมากสุด():
+    arm = Arm(simulate=True)
+    p = arm.best_pitch(r=350, theta_deg=90, z=100)
+    assert p is not None and -60 <= p <= 60
+
+def test_best_pitch_คืน_None_เมื่อไม่มี_pitch_ไหนทำได้():
+    arm = Arm(simulate=True)
+    assert arm.best_pitch(r=900, theta_deg=90, z=100) is None
+
+def test_โหมดจำลองไม่ต้องใช้ฮาร์ดแวร์():
+    arm = Arm(simulate=True)
+    assert arm.move_to(r=350, theta_deg=90, z=100, pitch_deg=15) is True
+    r, th, z, p = arm.current()
+    assert abs(r - 350) < 1 and abs(z - 100) < 1
+```
+
+- [ ] **Step 2: รันให้เห็นว่าล้มเหลว**
+
+```bash
+python -m pytest tests/test_arm.py -v
+```
+คาดว่า: `ModuleNotFoundError: No module named 'arm'`
+
+- [ ] **Step 3: เขียน `arm.py`**
+
+ต้องมีครบทุกข้อ:
+1. `simulate=None` → ลอง import `servo_controller` ถ้าล้มเหลวให้เข้าโหมดจำลองเอง พร้อมพิมพ์แจ้ง
+2. `move_to` แปลง `(r, theta)` → `(x, y)` แล้วเรียก `solve_ik` — `None` คือปฏิเสธ
+3. **จำกัด `r` ไม่เกิน `R_MAX_COMMAND = 420`** — กันสั่งเลยขอบ workspace
+4. **จำกัดความเร็ว** — คำนวณจำนวนก้าวจากมุมที่ต้องขยับมากสุด ให้ไม่เกิน `MAX_DEG_PER_SEC = 60`
+5. `best_pitch` วน −60..+60 ทีละ 5 เลือกค่าที่ `min(ระยะเหลือถึงขีดจำกัด)` มากสุด
+6. `nudge` เรียก `move_to` โดยบวกส่วนต่างเข้ากับท่าปัจจุบัน **โดยไม่แตะ `pitch`**
+7. โหมดจำลองพิมพ์เป็นภาษาไทยว่าจะสั่งอะไร แล้วจำท่าไว้ใน `self._pose`
+
+- [ ] **Step 4: รัน test ให้ผ่าน**
+
+```bash
+python -m pytest tests/test_arm.py -v
+```
+คาดว่า: ผ่านทั้ง 5 ข้อ **บน Mac โดยไม่ต้องต่อแขน**
+
+- [ ] **Step 5: ทดสอบบนแขนจริง**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
+from arm import Arm
+a = Arm(); a.go_scan_pose()
+p = a.best_pitch(350, 90, 100); print(\"pitch ที่เลือก:\", p)
+print(\"สั่งไป:\", a.move_to(350, 90, 100, p))
+a.retreat()
+"'
+```
+ดูด้วยตาว่าแขนขยับ**ช้าและนุ่มนวล** ไม่กระตุก
+
+- [ ] **Step 6: commit**
+
+```bash
+git add arm.py tests/test_arm.py servo_controller.py
+git commit -m "feat: เพิ่ม arm.py พร้อมชั้นความปลอดภัยและโหมดจำลอง"
+```
+
+**เกณฑ์ผ่าน:** test ผ่านบน Mac โดยไม่มีฮาร์ดแวร์ และแขนจริงขยับได้นุ่มนวล
+
+---
+
+### Task 4: `camera.py` — กล้อง 3 แบบหน้าตาเดียวกัน
+
+**Files:**
+- Create: `camera.py`, `tests/test_camera.py`
+
+**Interfaces:**
+- Produces:
+```python
+class BaseCamera:
+    def grab(self) -> np.ndarray | None      # BGR หรือ None ถ้าอ่านไม่ได้
+    def close(self) -> None
+
+class OverviewCamera(BaseCamera):  # Brio USB — รับ device path
+class WristCamera(BaseCamera):     # picamera2
+class ReplayCamera(BaseCamera):    # อ่านจากโฟลเดอร์ วนซ้ำเมื่อหมด
+def open_cameras(replay_dir: str | None = None) -> tuple[BaseCamera, BaseCamera]
+```
+
+- [ ] **Step 1: เขียน test**
+
+```python
+# tests/test_camera.py
+import cv2, numpy as np
+from camera import ReplayCamera
+
+def test_replay_อ่านภาพตามลำดับแล้ววนซ้ำ(tmp_path):
+    for i in range(3):
+        img = np.full((720, 1280, 3), i * 40, dtype=np.uint8)
+        cv2.imwrite(str(tmp_path / f"{i:03d}.jpg"), img)
+    cam = ReplayCamera(str(tmp_path))
+    seen = [int(cam.grab()[0, 0, 0]) for _ in range(4)]
+    assert seen[0] < seen[1] < seen[2]      # เรียงตามชื่อไฟล์
+    assert seen[3] == seen[0]               # วนกลับมาเริ่มใหม่
+
+def test_replay_คืน_None_เมื่อโฟลเดอร์ว่าง(tmp_path):
+    assert ReplayCamera(str(tmp_path)).grab() is None
+```
+
+- [ ] **Step 2: รันให้ล้มเหลว**
+
+```bash
+python -m pytest tests/test_camera.py -v
+```
+
+- [ ] **Step 3: เขียน `camera.py`**
+
+`OverviewCamera` ย้ายโค้ดเปิดกล้อง USB มาจาก `camera_preview.py` (ใช้ `cv2.CAP_V4L2`, ตั้ง `CAP_PROP_BUFFERSIZE=1`)
+`WristCamera` ใช้ `picamera2` แปลง RGB→BGR — **import `picamera2` ในเมธอด ไม่ใช่ระดับโมดูล** เพื่อให้ import ไฟล์นี้บน Mac ได้
+`open_cameras(replay_dir=...)` คืน `ReplayCamera` สองตัวเมื่อระบุโฟลเดอร์ ไม่งั้นคืนกล้องจริง
+
+- [ ] **Step 4: รัน test ให้ผ่าน**
+
+- [ ] **Step 5: ทดสอบกล้องจริงบน Pi และตอบคำถามที่ค้างอยู่ 2 ข้อ**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
+import cv2
+from camera import open_cameras
+ov, wr = open_cameras()
+cv2.imwrite(\"/tmp/overview.jpg\", ov.grab())
+cv2.imwrite(\"/tmp/wrist.jpg\", wr.grab())
+"'
+scp pi@<host>:/tmp/{overview,wrist}.jpg .
+```
+
+**ดู `wrist.jpg` แล้วตอบให้ได้:**
+1. เห็นปลาย gripper ในเฟรมไหม อยู่ตรงไหน
+2. gripper บังภาพไปกี่เปอร์เซ็นต์
+
+ผลลัพธ์กำหนดวิธีทำ Task 11:
+
+| ผล | Task 11 ทำแบบไหน |
+|---|---|
+| เห็น gripper ชัด | เทียบตำแหน่งวาล์วกับปลาย gripper ในภาพเดียวกัน — **ไม่ต้อง calibrate เลย** |
+| ไม่เห็น | ต้องหา "จุดเล็ง" ด้วยการทดลอง (Task 10 ขั้นเพิ่ม) |
+
+บันทึกคำตอบลง `DESIGN.md` หัวข้อ 11
+
+- [ ] **Step 6: commit**
+
+```bash
+git add camera.py tests/test_camera.py DESIGN.md
+git commit -m "feat: เพิ่ม camera.py รองรับกล้อง 2 ตัวและโหมดเล่นภาพซ้ำ"
+```
+
+**เกณฑ์ผ่าน:** import `camera.py` บน Mac ได้, test ผ่าน, มีภาพจากกล้องจริงทั้งสองตัว, ตอบคำถามเรื่องเห็น gripper ได้
+
+---
+
+### Task 5: ทดสอบโมเดลเดิมที่ระยะใกล้
+
+**ทำไม:** เฟสละเอียดต้องหาวาล์วเจอที่ระยะ 12–20 ซม. จากกล้องที่มือ แต่โมเดลเดิมน่าจะเทรนด้วยภาพระยะ ~40 ซม. จากกล้องคนละตัว **ถ้าหาไม่เจอ สถาปัตยกรรมทั้งหมดใช้ไม่ได้** — ต้องรู้ตอนนี้
+
+**Files:**
+- Create: `tools/test_model_at_range.py`
+
+- [ ] **Step 1: เขียนสคริปต์ถ่ายภาพที่ระยะต่างๆ**
+
+รับระยะเป็น argument ถ่ายจากกล้องที่มือ 5 ภาพ บันทึกลง `data/range_test/<ระยะ>cm/`
+
+- [ ] **Step 2: เก็บภาพที่ 12, 15, 20, 30, 40 ซม.**
+
+วัดระยะจากหน้าเลนส์ถึงก้านจุ๊บด้วยไม้บรรทัด ระยะละ 5 ภาพ = 25 ภาพ
+
+- [ ] **Step 3: รันโมเดลเดิมแล้วนับ**
+
+```bash
+python3 -c "
+import glob, cv2
+from valve_detector import load_model, preprocess, postprocess
+s, i, o = load_model()
+for d in ['12','15','20','30','40']:
+    files = sorted(glob.glob(f'data/range_test/{d}cm/*.jpg'))
+    hit = 0
+    for f in files:
+        img = cv2.imread(f); h, w = img.shape[:2]
+        b, sc, pl, pt = preprocess(img)
+        if postprocess(s.run([o], {i: b})[0], w, h, sc, pl, pt): hit += 1
+    print(f'{d}cm: เจอ {hit}/{len(files)}')
+"
+```
+
+- [ ] **Step 4: ตัดสินใจตามผล**
+
+| ผล | ทำต่อ |
+|---|---|
+| ที่ 12–20 ซม. เจอ ≥ 80% | ใช้โมเดลเดิมทำ Task 10–12 ไปก่อนได้ ค่อยเทรนใหม่ทีหลัง |
+| เจอ < 80% | **ต้องทำ Phase 1 ให้จบก่อนถึงจะทำเฟสละเอียดได้** |
+
+บันทึกผลลง `DESIGN.md` หัวข้อ 11
+
+- [ ] **Step 5: commit**
+
+```bash
+git add tools/test_model_at_range.py DESIGN.md
+git commit -m "test: ทดสอบโมเดลเดิมที่ระยะใกล้"
+```
+
+**เกณฑ์ผ่าน:** มีตารางอัตราการเจอแยกตามระยะ และตัดสินใจได้ว่าต้องเทรนใหม่หรือไม่
+
+---
+
+### Task 5B: จัดวางฐานแขนและทำเส้นมาร์คพื้น
+
+**ทำไมต้องอยู่ตรงนี้:** ต้องเสร็จ**ก่อน Task 6** เพราะ dataset ทั้งพันภาพจะถ่ายจากเรขาคณิตนี้ ถ้าย้ายฐานทีหลัง มุมมองเปลี่ยนหมด ภาพที่เก็บมาจะไม่ตรงกับตอนใช้งานจริงอีกต่อไป — และต้องอยู่หลัง Task 1–2 เพราะต้องใช้ตาราง workspace ที่คำนวณจากค่าจริง
+
+**Files:**
+- Modify: `DESIGN.md` (หัวข้อ 6 — จดตำแหน่งที่วางจริง)
+
+**Interfaces:**
+- Consumes: ตาราง workspace จาก Task 1, ค่า `L1`–`L4` จาก Task 2, `arm.Arm` จาก Task 3
+- Produces: เรขาคณิตคงที่ที่ทุก task หลังจากนี้พึ่งพา + เส้นมาร์คพื้น
+
+- [ ] **Step 1: หาจุดที่ควรวางจากตาราง workspace จริง**
+
+```bash
+python3 - <<'PY'
+import io, contextlib
+from ik_solver import solve_ik
+from config import LIMITS
+sink = io.StringIO()
+print("หาจุดที่เหลือระยะขยับมากที่สุด")
+print(f"{'(r, z)':>12} | {'pitch ดีสุด':>10} | {'เหลือ':>6}")
+best = None
+for r in range(200, 421, 25):
+    for z in range(60, 221, 20):
+        cand = []
+        for p in range(-60, 61, 5):
+            with contextlib.redirect_stdout(sink):
+                a = solve_ik(float(r), 0.0, float(z), float(p))
+            if a:
+                m = min(min(v - LIMITS[j][0], LIMITS[j][1] - v)
+                        for j, v in a.items() if j in ('J2','J3','J4'))
+                cand.append((m, p))
+        if cand:
+            m, p = max(cand)
+            if best is None or m > best[0]:
+                best = (m, r, z, p)
+            print(f"{f'({r},{z})':>12} | {p:+10d} | {m:6.1f}°")
+print(f"\n→ จุดที่ดีที่สุด: r={best[1]}, z={best[2]}, pitch={best[3]:+d}° (เหลือ {best[0]:.1f}°)")
+PY
+```
+
+**ใช้ตัวเลขที่สคริปต์นี้บอก ไม่ใช่ r≈350/z≈100 ที่เขียนไว้ใน `DESIGN.md`** — ค่านั้นคำนวณจาก `LIMITS = (0,180)` ที่ยังไม่ได้วัดจริง
+
+- [ ] **Step 2: วัดตำแหน่งวาล์วบนล้อจริง**
+
+วางล้อในท่าที่จะใช้สอบ วัด **ความสูงของก้านจุ๊บจากพื้น** ที่ตำแหน่งนาฬิกา 5, 6, 7, 8, 9
+เอาค่าสูงสุดกับต่ำสุดมาหาค่ากลาง — ฐานแขนต้องวางให้ค่ากลางนี้ตรงกับ `z` ที่ได้จาก Step 1
+
+- [ ] **Step 3: วางฐานแล้ววัดยืนยัน**
+
+```
+ความสูงฐาน = ความสูงก้านจุ๊บเฉลี่ยจากพื้น − z ที่ต้องการ
+ระยะฐานถึงล้อ  = r ที่ต้องการ (วัดจากแกน J1 ถึงก้านจุ๊บ ตามแนวราบ)
+```
+ถ้าฐานต้องสูงกว่าโต๊ะ ให้รองด้วยแท่นแข็ง — **ห้ามใช้ของที่ยุบหรือขยับได้** เพราะจะทำให้ความเที่ยงเสียโดยหาสาเหตุไม่เจอ
+
+- [ ] **Step 4: ทำเส้นมาร์คพื้น**
+
+ใช้เทปพันสายไฟติดพื้นเป็นมุมฉาก 2 เส้นสำหรับทาบขอบล้อ **และ 2 เส้นสำหรับฐานแขนด้วย**
+เพียงเส้นเดียวไม่พอ — ต้องล็อกทั้งตำแหน่งและการหมุน
+
+- [ ] **Step 5: ยืนยันว่าทุกตำแหน่งนาฬิกาเอื้อมถึงจริง**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
+from arm import Arm
+a = Arm()
+for name, r, th, z in [(\"5น\",350,75,90),(\"6น\",350,90,80),(\"7น\",350,105,90),(\"8น\",340,115,110),(\"9น\",330,120,140)]:
+    p = a.best_pitch(r, th, z)
+    print(name, \"pitch=\", p, \"→\", \"ถึง\" if p is not None else \"★ ไม่ถึง\")
+"'
+```
+แทนค่า `r, th, z` ด้วยที่วัดได้จริงในแต่ละตำแหน่งนาฬิกา
+**ถ้ามีตำแหน่งไหน "ไม่ถึง" ให้ขยับฐานแล้ววัดใหม่ตั้งแต่ Step 3** — แก้ตอนนี้ถูกกว่าแก้หลังเก็บ dataset ไปแล้ว 1,000 ภาพ
+
+- [ ] **Step 6: จดลง `DESIGN.md` แล้ว commit**
+
+จดความสูงฐาน ระยะฐานถึงล้อ และค่า `(r, θ, z)` ของทั้ง 5 ตำแหน่งนาฬิกา พร้อมถ่ายรูปการจัดวางเก็บไว้
+
+```bash
+git add DESIGN.md && git commit -m "docs: จัดวางฐานแขนและบันทึกเรขาคณิตที่ใช้จริง"
+```
+
+**เกณฑ์ผ่าน:** ทั้ง 5 ตำแหน่งนาฬิกาเอื้อมถึงได้ และมีเส้นมาร์คทั้งของล้อและของฐานแขน
+
+---
+
+### Task 6: `tools/collect_dataset.py` — แขนกวาดเก็บภาพเอง
+
+**Files:**
+- Create: `tools/collect_dataset.py`
+
+**Interfaces:**
+- Consumes: `arm.Arm`, `camera.open_cameras`
+- Produces: ภาพใน `data/raw/<session_id>/` ชื่อไฟล์ `<session_id>_<pose_id>_<cam>.jpg`
+  โดย `session_id` = `<นาฬิกา>_<แสง>` เช่น `06_dim` — **ชื่อนี้คือสิ่งที่ใช้แบ่ง train/val ตามรอบ**
+
+- [ ] **Step 1: เขียนสคริปต์**
+
+```
+รับ argument: --clock 6 --light dim
+ถามยืนยันว่าหมุนล้อและตั้งไฟเรียบร้อยแล้ว
+วน 25 ท่า: 5 ค่า theta × 5 คู่ (r, z) รอบจุดกึ่งกลางที่คาดว่าวาล์วอยู่
+  แต่ละท่า:
+    - เคลื่อนไปด้วย arm.move_to() — ถ้าคืน False ให้ข้ามท่านั้นแล้วจดไว้
+    - ★ ถ่าย 1 ภาพ "ระหว่างกำลังขยับ" (ได้ภาพเบลอที่จำเป็น)
+    - รอให้นิ่ง 0.4 วิ แล้วถ่ายจากทั้ง 2 กล้อง
+กลับท่าสแกน แล้วสรุปว่าได้กี่ภาพ ข้ามไปกี่ท่า
+```
+
+- [ ] **Step 2: ทดลองรอบเดียวก่อน แล้วดูภาพทุกใบ**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python tools/collect_dataset.py --clock 6 --light room'
+```
+
+**ต้องดูภาพจริงก่อนเก็บอีก 19 รอบ** — ถ้ากรอบท่ากวาดผิด วาล์วจะไม่อยู่ในภาพเลยทั้ง 20 รอบ แล้วเสียเวลาฟรี
+เกณฑ์: ภาพจากกล้องที่มืออย่างน้อย 50% ต้องเห็นวาล์ว
+
+- [ ] **Step 3: ปรับกรอบท่ากวาดถ้าจำเป็น แล้วเก็บครบ 20 รอบ**
+
+5 ตำแหน่งนาฬิกา (5,6,7,8,9) × 4 สภาพแสง (`day`, `room`, `dim`, `torch`)
+คนหมุนล้อ/สลับไฟก่อนแต่ละรอบ — ใช้เวลารวมประมาณ 1.5 ชั่วโมง
+
+- [ ] **Step 4: ตรวจว่าได้ครบ**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && for d in data/raw/*/; do echo -n "$d "; ls $d | wc -l; done'
+```
+คาดว่า: 20 โฟลเดอร์ โฟลเดอร์ละ ~50–75 ภาพ
+
+- [ ] **Step 5: commit สคริปต์ (ไม่ commit ภาพ)**
+
+```bash
+echo "data/" >> .gitignore
+git add tools/collect_dataset.py .gitignore
+git commit -m "feat: เพิ่มสคริปต์เก็บ dataset อัตโนมัติด้วยแขนกล"
+```
+
+**เกณฑ์ผ่าน:** มีภาพดิบ ~1,000 ภาพ แยกโฟลเดอร์ตามรอบ และภาพจากกล้องที่มือ ≥50% เห็นวาล์ว
+
+---
+
+### Task 7: Label 150 ภาพและเทรนโมเดลหยาบ
+
+**Files:**
+- Create: `data/dataset_v1/` (labels + `data.yaml`), `models/valve_v1.onnx`
+
+- [ ] **Step 1: เลือก 150 ภาพให้คละกัน**
+
+จาก 20 รอบ เอารอบละ 7–8 ภาพ **คละทั้ง 2 กล้อง ทั้งภาพชัดและภาพเบลอ**
+รวมภาพที่**ไม่มีวาล์ว** ~40 ภาพเข้าไปด้วย (รูระบายอากาศ น็อตล้อ) — ภาพเหล่านี้ label เป็นไฟล์ว่าง
+
+- [ ] **Step 2: Label ด้วย Roboflow หรือ labelImg**
+
+class เดียว: `valve`
+**กรอบต้องครอบ "ก้านจุ๊บทั้งอัน" ตั้งแต่จุดที่โผล่พ้นขอบล้อถึงปลายสุด** — นิยามนี้ต้องเหมือนกันทุกภาพ ไม่งั้นโมเดลจะสับสน
+
+- [ ] **Step 3: จัด train/val ตามรอบ**
+
+16 รอบ → train, 4 รอบ → val
+4 รอบที่กันไว้ต้องมี **สภาพแสงที่ไม่อยู่ใน train อย่างน้อย 1 รอบ** และ **ตำแหน่งนาฬิกาที่ไม่อยู่ใน train อย่างน้อย 1 รอบ**
+
+- [ ] **Step 4: เทรนบน Colab**
+
+```python
+from ultralytics import YOLO
+YOLO("yolo11n.pt").train(
+    data="data.yaml", epochs=100, imgsz=640, batch=16,
+    degrees=5, close_mosaic=15, project="valve", name="v1",
+)
+```
+
+- [ ] **Step 5: export เป็น ONNX แล้วดึงลง Pi**
+
+```python
+YOLO("valve/v1/weights/best.pt").export(format="onnx", imgsz=640, simplify=True)
+```
+
+- [ ] **Step 6: บันทึกผล**
+
+จด mAP50, mAP50-95, precision, recall ลง `DESIGN.md` — **ตัวเลขชุดนี้คือสิ่งที่หายไปจากโมเดลเดิมและกรรมการจะถาม**
+
+- [ ] **Step 7: commit**
+
+```bash
+git add models/valve_v1.onnx DESIGN.md
+git commit -m "feat: เทรนโมเดลรอบที่ 1 จาก 150 ภาพที่ label เอง"
+```
+
+**เกณฑ์ผ่าน:** mAP50 ≥ 0.6 บน 4 รอบที่กันไว้ (แค่พอใช้ bootstrap รอบ 2 ไม่ต้องดีมาก)
+
+---
+
+### Task 8: `tools/measure_pixel_scale.py` — วัดอัตราส่วนพิกเซล
+
+**ทำไม:** เฟสละเอียดต้องรู้ว่า "หมุน J1 ไป 1 องศา → ภาพเลื่อนกี่พิกเซล" **ทิศทางสำคัญกว่าขนาด** เพราะถ้าเครื่องหมายกลับด้าน ลูปจะวิ่งหนีเป้าแทนที่จะเข้าหา
+
+**Files:**
+- Create: `tools/measure_pixel_scale.py`, `pixel_scale.json`
+
+**Interfaces:**
+- Produces: `pixel_scale.json`
+```json
+{
+  "deg_per_px_x": 0.045,
+  "mm_per_px_y": 0.32,
+  "measured_at_cm": 15,
+  "aim_x": 640,
+  "aim_y": 520,
+  "aim_from": "gripper_visible"
+}
+```
+เครื่องหมายของ `deg_per_px_x` และ `mm_per_px_y` คือทิศทาง — `fine.py` ใช้ตรงๆ ไม่ต้องเดา
+
+`aim_x`, `aim_y` คือ "จุดเล็ง" ในภาพ — ตำแหน่งที่วาล์วต้องมาอยู่ก่อนเดินหน้าเข้าไปแตะ
+`aim_from` มีสองค่าตามผล Task 4:
+- `"gripper_visible"` — เห็นปลาย gripper ในภาพ `fine.py` จะ**ตรวจหาปลาย gripper ทุกเฟรมแล้วใช้เป็นจุดเล็ง** ค่า `aim_x/aim_y` ในไฟล์เป็นแค่ค่าสำรองเมื่อหาไม่เจอ
+- `"calibrated"` — ไม่เห็นปลาย gripper ต้องหาจุดเล็งด้วยการทดลอง (ดู Step 4 ของ task นี้) แล้ว `fine.py` ใช้ค่าคงที่จากไฟล์
+
+- [ ] **Step 1: เขียนสคริปต์**
+
+```
+วางแขนให้เห็นวาล์วที่ระยะ ~15 ซม.
+ตรวจจับ จด (u0, v0)
+arm.nudge(d_theta_deg=+3, d_z=0) → ตรวจจับ จด (u1, v1)
+    deg_per_px_x = 3.0 / (u1 - u0)
+arm.nudge(d_theta_deg=0, d_z=+10) → ตรวจจับ จด (u2, v2)
+    mm_per_px_y = 10.0 / (v2 - v1)
+ทำซ้ำ 3 รอบเอาค่าเฉลี่ย เขียนลง pixel_scale.json
+```
+
+- [ ] **Step 2: รันบน Pi**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python tools/measure_pixel_scale.py'
+```
+
+- [ ] **Step 3: ตรวจความสมเหตุสมผลของเครื่องหมาย**
+
+หมุน J1 เพิ่ม แล้ววาล์วควรเลื่อนไปทางเดียวกันทุกครั้ง — ถ้า 3 รอบได้เครื่องหมายไม่ตรงกัน แปลว่าการตรวจจับไม่นิ่ง ต้องแก้ก่อน
+
+- [ ] **Step 4: หา `aim_x`, `aim_y` — ทำเฉพาะเมื่อ Task 4 พบว่าไม่เห็นปลาย gripper**
+
+ถ้าเห็นปลาย gripper ให้ตั้ง `aim_from="gripper_visible"` แล้วข้าม step นี้ไป
+
+ถ้าไม่เห็น: jog แขนด้วยมือจนปลายแตะก้านจุ๊บพอดี → ถอยกลับตามแกนออกมา 15 ซม. โดยไม่เปลี่ยน `theta`, `z`, `pitch`
+→ ตรวจจับวาล์วในเฟรมนั้น ตำแหน่ง `(u, v)` ที่ได้**คือจุดเล็ง** เพราะเราพิสูจน์แล้วว่าจากจุดนี้เดินตรงเข้าไปแล้วแตะโดน
+ทำซ้ำ 3 ครั้งเอาค่าเฉลี่ย ตั้ง `aim_from="calibrated"`
+
+- [ ] **Step 5: commit**
+
+```bash
+git add tools/measure_pixel_scale.py pixel_scale.json
+git commit -m "feat: วัดอัตราส่วนพิกเซลสำหรับเฟสละเอียด"
+```
+
+**เกณฑ์ผ่าน:** ทำ 3 รอบได้เครื่องหมายตรงกันทุกรอบ และขนาดต่างกันไม่เกิน 20%
+
+---
+
+### Task 9: `coarse.py` — เฟสหยาบ
+
+**Files:**
+- Create: `coarse.py`, `tests/test_coarse.py`
+
+**Interfaces:**
+- Consumes: `camera.BaseCamera`, `valve_detector`, `arm.Arm`
+- Produces:
+```python
+@dataclass
+class CoarseResult:
+    ok: bool
+    r: float; theta_deg: float; z: float; pitch_deg: float
+    reason: str          # "ok" | "ไม่เจอวาล์ว" | "เอื้อมไม่ถึง" | "กล้องมีปัญหา"
+
+def coarse_locate(cam, session, arm, *, confirm_frames: int = 3) -> CoarseResult
+```
+
+- [ ] **Step 1: เขียน test ด้วย `ReplayCamera`**
+
+```python
+from camera import ReplayCamera
+from coarse import coarse_locate
+from arm import Arm
+from valve_detector import load_model
+
+def test_ไม่เจอวาล์วต้องคืน_ok_False(tmp_path):
+    import cv2, numpy as np
+    cv2.imwrite(str(tmp_path / "000.jpg"), np.zeros((720,1280,3), np.uint8))
+    res = coarse_locate(ReplayCamera(str(tmp_path)), load_model(), Arm(simulate=True))
+    assert res.ok is False and res.reason == "ไม่เจอวาล์ว"
+```
+
+- [ ] **Step 2: รันให้ล้มเหลว**
+
+- [ ] **Step 3: เขียน `coarse.py`**
+
+หน้าที่: หาว่าวาล์วอยู่โซนไหน **ไม่ต้องแม่น** — พาแขนเข้าใกล้พอให้กล้องที่มือเห็นก็พอ
+1. ถ่ายจนเจอวาล์วติดกัน 3 เฟรม ถ้าไม่เจอคืน `ok=False`
+2. แปลงตำแหน่งในภาพเป็น `theta` (ซ้าย-ขวา) และ `z` (บน-ล่าง) แบบหยาบ ตั้ง `r` ให้ห่างจากล้อ ~20 ซม.
+3. เรียก `arm.best_pitch()` — ถ้าคืน `None` ให้คืน `reason="เอื้อมไม่ถึง"`
+4. `arm.move_to()` ไปที่นั่น
+
+**อนุญาตให้ใช้สูตรแปลงเป็นมิลลิเมตรได้เฉพาะในไฟล์นี้** เพราะความคลาดเคลื่อนจะถูกเฟสละเอียดแก้ทีหลัง — แต่ห้ามใส่ค่าชดเชยคงที่
+
+- [ ] **Step 4: รัน test ให้ผ่าน**
+
+- [ ] **Step 5: commit**
+
+```bash
+git add coarse.py tests/test_coarse.py
+git commit -m "feat: เพิ่มเฟสหยาบ"
+```
+
+**เกณฑ์ผ่าน:** test ผ่านบน Mac และบน Pi จริง แขนเคลื่อนไปจนกล้องที่มือเห็นวาล์วได้ ≥8 จาก 10 ครั้ง
+
+---
+
+### Task 10: `fine.py` — เฟสละเอียด
+
+**Files:**
+- Create: `fine.py`, `tests/test_fine.py`
+
+**Interfaces:**
+- Produces:
+```python
+@dataclass
+class FineResult:
+    converged: bool
+    steps: int
+    final_px_err: float
+    reason: str          # "เข้าเป้า" | "ครบรอบสูงสุด" | "มองไม่เห็นวาล์ว" | "แขนขยับต่อไม่ได้"
+
+def fine_align(cam, session, arm, scale: dict, *,
+               max_steps: int = 8, px_thresh: float = 12.0,
+               gain: float = 0.5) -> FineResult
+```
+
+- [ ] **Step 1: เขียน test ด้วยกล้องปลอมที่จำลองการลู่เข้า**
+
+```python
+class FakeCam:
+    """ทุกครั้งที่แขนขยับ ให้ค่าความคลาดเคลื่อนลดลงครึ่งหนึ่ง"""
+
+def test_ลู่เข้าเป้าแล้วต้องหยุด(): ...
+def test_มองไม่เห็นวาล์วต้องหยุดทันที(): ...
+def test_ครบรอบสูงสุดต้องหยุด_ไม่วนไม่จบ(): ...
+```
+
+- [ ] **Step 2: รันให้ล้มเหลว**
+
+- [ ] **Step 3: เขียน `fine.py`**
+
+```
+วนไม่เกิน max_steps:
+    ถ่าย → ตรวจจับ
+    ถ้าไม่เจอ → คืน reason="มองไม่เห็นวาล์ว" ทันที
+    err_x = u - เป้า_x ;  err_y = v - เป้า_y
+    ถ้า sqrt(err_x² + err_y²) < px_thresh → คืน converged=True
+    d_theta = err_x * scale["deg_per_px_x"] * gain     ← ★ คูณ gain 0.5
+    d_z     = err_y * scale["mm_per_px_y"]   * gain
+    ถ้า arm.nudge(d_theta, d_z) เป็น False → คืน reason="แขนขยับต่อไม่ได้"
+คืน reason="ครบรอบสูงสุด"
+```
+
+**`เป้า_x, เป้า_y` มาจากไหน** — ขึ้นกับผล Task 4:
+- เห็นปลาย gripper → เป้าคือตำแหน่งของปลาย gripper ในภาพนั้น (ตรวจทุกเฟรม)
+- ไม่เห็น → เป้าคือค่าคงที่ที่หาจากการทดลอง เก็บใน `pixel_scale.json` เป็น `aim_x`, `aim_y`
+
+**ห้ามแตะ `pitch` ในลูปนี้เด็ดขาด** — `arm.nudge()` ไม่รับ pitch อยู่แล้ว เป็นการบังคับด้วยโครงสร้าง
+
+- [ ] **Step 4: รัน test ให้ผ่าน**
+
+- [ ] **Step 5: ทดสอบบนของจริง ดูว่า error ลดลงทุกรอบ**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python -m fine --debug'
+```
+คาดว่าเห็น: `รอบ 1: 84px → รอบ 2: 41px → รอบ 3: 19px → รอบ 4: 9px เข้าเป้า`
+**ถ้า error ไม่ลดลง แปลว่าเครื่องหมายใน `pixel_scale.json` กลับด้าน** ให้กลับไปทำ Task 8 ใหม่
+
+- [ ] **Step 6: commit**
+
+```bash
+git add fine.py tests/test_fine.py
+git commit -m "feat: เพิ่มเฟสละเอียดแบบคิดเป็นพิกเซล"
+```
+
+**เกณฑ์ผ่าน:** ความคลาดเคลื่อนลดลงทุกรอบ และลู่เข้าต่ำกว่า 12 พิกเซลภายใน 8 รอบ ได้ ≥8 จาก 10 ครั้ง
+
+---
+
+### Task 11: `run.py` — ร้อยทุกอย่างเข้าด้วยกัน
+
+**Files:**
+- Create: `run.py`, `tests/test_run.py`
+
+**Interfaces:**
+- Produces: `def main(replay_dir: str | None = None) -> None` และ state machine 4 สถานะ
+
+- [ ] **Step 1: เขียน test ของ state machine ด้วย `ReplayCamera`**
+
+ทดสอบทางที่ผิดพลาดให้ครบ: ไม่เจอวาล์ว / เอื้อมไม่ถึง / เฟสละเอียดไม่ลู่เข้า / กล้องหลุด
+**ทุกทางต้องจบที่ "กลับท่าสแกน" ไม่ใช่ crash หรือค้าง**
+
+- [ ] **Step 2: รันให้ล้มเหลว**
+
+- [ ] **Step 3: เขียน `run.py`**
+
+```
+สถานะ SCAN     → coarse_locate() สำเร็จ? → APPROACH : SCAN
+สถานะ APPROACH → fine_align() converged? → TOUCH : RECOVER
+สถานะ TOUCH    → เดินหน้าตามแกนอีก 12 ซม. (จำกัดเกินไม่เกิน 5 มม.)
+                 ★ ถอยทันที ไม่ค้าง ★  → RECOVER
+สถานะ RECOVER  → arm.retreat() → arm.go_scan_pose() → SCAN
+```
+ดัก `KeyboardInterrupt` ให้ `retreat()` ก่อนออกเสมอ — **ห้ามทิ้งแขนค้างอยู่ในซอกล้อ**
+
+- [ ] **Step 4: รัน test ให้ผ่าน**
+
+- [ ] **Step 5: รันจริงครบวงจร 5 ครั้ง**
+
+```bash
+ssh pi@<host> 'cd ~/ValveVision-PiArm && python run.py'
+```
+
+- [ ] **Step 6: commit**
+
+```bash
+git add run.py tests/test_run.py
+git commit -m "feat: เพิ่ม state machine ครบวงจร"
+```
+
+**เกณฑ์ผ่าน:** รัน 5 ครั้งติดโดยไม่ crash ไม่ค้าง และทุกครั้งจบด้วยแขนกลับท่าสแกน
+
+---
+
+### Task 12: Dataset รอบที่ 2 และโมเดลตัวจริง
+
+**Files:**
+- Create: `tools/record_run.py`, `tools/prelabel.py`, `models/valve_v2.onnx`
+
+- [ ] **Step 1: เขียน `tools/record_run.py`**
+
+wrapper ของ `run.py` ที่บันทึกทุกเฟรมพร้อมข้อมูลกำกับ (สถานะ, ท่าแขน, ผลตรวจจับ) ลง `data/runs/<timestamp>/`
+
+- [ ] **Step 2: รัน 15 ครั้ง คละตำแหน่งนาฬิกาและแสง**
+
+ได้ ~450 ภาพที่**ตรงกับสิ่งที่ระบบเจอจริงที่สุด** เพราะมาจากการรันจริง
+
+- [ ] **Step 3: เขียน `tools/prelabel.py`**
+
+ให้ `valve_v1.onnx` ทำนายกรอบ เขียนเป็นไฟล์ label รูปแบบ YOLO ให้ไปแก้ต่อ
+
+- [ ] **Step 4: ไล่แก้กรอบที่ผิด**
+
+ส่วนใหญ่จะถูกอยู่แล้ว แก้เฉพาะที่ผิด — เร็วกว่า label เองราว 3 เท่า
+
+- [ ] **Step 5: รวม dataset แล้วเทรนใหม่**
+
+```python
+from ultralytics import YOLO
+YOLO("yolo11n.pt").train(
+    data="data_v2.yaml", epochs=150, imgsz=640, batch=16,
+    degrees=5, close_mosaic=15, project="valve", name="v2",
+)
+```
+**การแบ่ง val ยังต้องแบ่งตามรอบเหมือนเดิม** และภาพจาก `data/runs/` ให้ถือว่าแต่ละครั้งที่รันคือหนึ่งรอบ
+
+- [ ] **Step 6: วัดผลแยกตามระยะ**
+
+ทำตารางแบบ Task 5 อีกครั้งกับ `valve_v2.onnx`
+**เกณฑ์สำคัญ: recall ที่ระยะ 12–20 ซม. ต้อง ≥ 0.95**
+
+- [ ] **Step 7: หา `CONF_THRESH` ที่เหมาะจากกราฟ precision-recall แล้วแก้ `valve_detector.py`**
+
+ค่าเดิม 0.10 ต่ำเกินไป
+
+- [ ] **Step 8: commit**
+
+```bash
+git add tools/record_run.py tools/prelabel.py models/valve_v2.onnx valve_detector.py DESIGN.md
+git commit -m "feat: dataset รอบที่ 2 และโมเดลตัวจริง"
+```
+
+**เกณฑ์ผ่าน:** mAP50 ≥ 0.85, recall ที่ 12–20 ซม. ≥ 0.95, false positive บนภาพลบ ≤ 5%
+
+---
+
+### Task 13: การทดลองและตัวเลขสำหรับรายงาน
+
+**Files:**
+- Create: `tools/measure_repeatability.py`, `results/` (ชุดใหม่)
+
+- [ ] **Step 1: เขียน `tools/measure_repeatability.py`**
+
+**ติดเครื่องหมายสีสด (เช่นสติกเกอร์สีส้ม) ที่ปลายแขน แล้วหาด้วยการกรองสีใน HSV**
+**ห้ามใช้ template matching กับตัวแขน** — เป็นวิธีที่พังในการทดลองรอบก่อน (2 ใน 10 ครั้งรายงานค่า 600 มม. ซึ่งเกินระยะที่แขนเอื้อมถึงได้ทั้งหมด)
+ตรวจสอบความสมเหตุสมผล: ถ้าค่าที่วัดได้เกิน 50 มม. ให้ทิ้งและแจ้งเตือน ไม่ใช่บันทึกเงียบๆ
+
+- [ ] **Step 2: การทดลองที่ 1 — ความเที่ยงของแขน**
+
+รัน 20 ครั้งไปพิกัดเดิม **ไม่แตะล้อเลย** → `results/repeatability_arm.csv`
+
+- [ ] **Step 3: การทดลองที่ 2 — ความเที่ยงของการจัดฉาก**
+
+ยกล้อออกวางกลับตามเส้นมาร์ค 10 ครั้ง → `results/repeatability_setup.csv`
+
+- [ ] **Step 4: การทดลองที่ 3 — ความแม่นแบบครบวงจร**
+
+กระดาษเป้าวงกลม รัน 20 ครั้ง ถ่ายรูปกระดาษ → `results/accuracy_target.jpg` + `.csv`
+
+- [ ] **Step 5: การทดลองที่ 4 — อัตราสำเร็จแยกเงื่อนไข**
+
+5 ตำแหน่งนาฬิกา × 3 สภาพแสง × 3 ครั้ง = 45 รอบ บันทึกสำเร็จ/ล้มเหลว + สาเหตุ → `results/success_matrix.csv`
+
+- [ ] **Step 6: สรุปลง `RESULTS.md`**
+
+ต้องมี: ตารางทั้ง 4 การทดลอง, รูปกระดาษเป้า, ตารางผลโมเดลแยกตามระยะ, **และหัวข้อข้อจำกัดที่เขียนอย่างซื่อสัตย์**
+
+- [ ] **Step 7: commit**
+
+```bash
+git add tools/measure_repeatability.py results/ RESULTS.md
+git commit -m "docs: ผลการทดลองครบทั้ง 4 ชุด"
+```
+
+**เกณฑ์ผ่าน:** อัตราสำเร็จ ≥ 90% จาก 45 รอบ และมีตัวเลขความแม่น/ความเที่ยงแยกกันชัดเจน
+
+---
+
+## ลำดับและสิ่งที่ขวางกัน
+
+```
+Task 1 ─→ Task 2 ─→ Task 3 ─→ Task 5B ─→ Task 6 ─→ Task 7 ─┐
+ขีดจำกัด  ความยาว   arm.py    วางฐาน     เก็บ data  โมเดล v1  │
+                       ▲                                     ↓
+                       │                            Task 8 (pixel scale)
+Task 4 ─→ Task 5 ──────┘                                     │
+camera.py  ทดสอบโมเดลเดิม                                     ↓
+                              Task 9 ─→ Task 10 ─→ Task 11
+                              coarse    fine       run
+                                                     │
+                                    Task 12 ←────────┤
+                                    โมเดล v2         │
+                                        └→ Task 13 ←─┘
+                                           วัดผล
+```
+
+- **Task 1 ต้องเสร็จก่อนทุกอย่าง** — ตัวเลข workspace ทั้งหมดพึ่งพามัน
+- **Task 4 + Task 5 ทำขนานกับ Task 1–3 ได้** ไม่เกี่ยวกัน
+- **★ Task 5B ต้องเสร็จก่อน Task 6 เด็ดขาด** — ถ้าย้ายฐานหลังเก็บ dataset แล้ว ภาพทั้งพันใบจะไม่ตรงกับมุมมองจริงอีกต่อไป ต้องเก็บใหม่หมด
+- **Task 5 เป็นตัวตัดสินว่า Task 10 ทำได้เลยหรือต้องรอ Task 12**
+- **Task 8 ต้องมีโมเดลที่ใช้ได้ก่อน** จะเป็น v1 หรือของเดิมก็ได้ถ้า Task 5 ผ่าน
+- **Task 4 เป็นตัวกำหนดว่า Task 8 Step 4 ต้องทำหรือข้าม** (เห็นปลาย gripper หรือไม่)
