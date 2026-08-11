@@ -1,7 +1,0 @@
-trial,valve_type,valve_length,valve_shape,lighting_lux,detected,confidence,notes
-1,Schrader,short,straight,500,1,0.82,
-2,Schrader,long,straight,500,1,0.76,
-3,Schrader,short,bent_45deg,500,0,,bbox บิดเกินไป
-4,Schrader,short,straight,200,1,0.61,แสงน้อย
-5,Schrader,short,straight,200,0,,แสงน้อยเกิน
-6,Presta,long,straight,500,0,,ไม่มีใน training set
