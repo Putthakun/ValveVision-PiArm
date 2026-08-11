@@ -449,6 +449,7 @@ CONFIRM_FRAMES   = 3     # เฟรมติดกันก่อนยื่�
 SERVO_MAX_STEPS  = 5     # จำนวน iteration สูงสุดของ visual servo
 SERVO_PIX_THRESH = 10.0  # pixel error (px) ที่ถือว่า converge แล้ว
 APPROACH_MM      = 80    # หยุดก่อนถึง valve (mm) เพื่อไม่ชนล้อ ปรับได้
+HOLD_AT_TARGET_SEC = 7   # ค้างแขนไว้ที่เป้าหมายกี่วิ ก่อนเริ่มเช็คว่า valve หายไหม
 
 def main():
     arm = ServoController()
@@ -518,7 +519,8 @@ def main():
                     angles_final = solve_ik_clamped(x3, y3, z3)
                     print(f"  [arm] Phase3 advance → ({x3:.0f}, {y3:.0f}, {z3:.0f}) mm")
                     arm.move_smooth(angles_final, steps=30, delay=0.02, settle=0.3)
-                    print(f"  [arm] ถึงเป้า — รอ valve หาย\n")
+                    print(f"  [arm] ถึงเป้า — ค้างไว้ {HOLD_AT_TARGET_SEC:.0f}s ก่อนเช็ค valve หาย\n")
+                    time.sleep(HOLD_AT_TARGET_SEC)
                     at_scan  = False   # ล็อค: ไม่รับ detection ใหม่จนกว่า valve จะหาย
                     miss_cnt = 0
             else:

@@ -1,0 +1,19 @@
+[Unit]
+Description=ValveVision-PiArm - auto valve detection and arm control
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/home/user/ValveVision-PiArm
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/user/ValveVision-PiArm/venv/bin/python /home/user/ValveVision-PiArm/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
