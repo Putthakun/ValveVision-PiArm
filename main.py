@@ -24,7 +24,7 @@ try:
 except Exception:
     Picamera2 = None
 
-TARGET_CLASS = CLASS_NAMES.index("joob")   # class_id ของจุ๊บลม
+TARGET_CLASS = CLASS_NAMES.index("valve")   # โมเดลใหม่มี class เดียว ไม่แยก body/joob แล้ว
 
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "auto").lower()  # auto | picamera2 | local | http
 CAMERA_DEVICE = os.getenv("CAMERA_DEVICE", "0")

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-camera_preview.py — ดู Camera Module 3 แบบ realtime ผ่าน browser
+camera_preview.py — ดูกล้องภาพรวม (overview camera, USB webcam) แบบ realtime ผ่าน browser
 พร้อม real-time valve detection ด้วย ONNX model
+
+กล้อง: Logitech Brio 100 (USB) ต่อผ่าน /dev/v4l/by-id/... — path คงที่ไม่ขึ้นกับลำดับ /dev/videoN
+       (Camera Module 3 ย้ายไปติดที่ gripper แทนแล้ว ไม่ได้ใช้ในสคริปต์นี้)
 
 รัน:  python3 camera_preview.py
 เปิด: http://<TAILSCALE_IP>:8080/stream   — ภาพดิบ
@@ -12,16 +15,23 @@ Ctrl+C เพื่อหยุด
 """
 
 import io
+import os
 import threading
 import numpy as np
 import cv2
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
-from picamera2 import Picamera2
-from picamera2.encoders import MJPEGEncoder
-from picamera2.outputs import FileOutput
 
 from valve_detector import (load_model, preprocess, postprocess,
                              draw_detections, CONF_THRESH, IOU_THRESH, CLASS_NAMES)
+
+# path คงที่ของ Brio 100 — ไม่เปลี่ยนแม้ /dev/videoN จะสลับลำดับหลัง reboot
+CAMERA_DEVICE = os.getenv(
+    "OVERVIEW_CAMERA_DEVICE",
+    "/dev/v4l/by-id/usb-046d_Brio_100_2544APY4JYJ8-video-index0",
+)
+CAMERA_FRAME_WIDTH  = int(os.getenv("CAMERA_FRAME_WIDTH", "1280"))
+CAMERA_FRAME_HEIGHT = int(os.getenv("CAMERA_FRAME_HEIGHT", "720"))
+CAMERA_FPS          = int(os.getenv("CAMERA_FPS", "30"))
 
 
 # ── Shared frame buffers ─────────────────────────────────────────────────────
@@ -140,6 +150,30 @@ def overlay_worker():
             det_output.update(buf.tobytes())
 
 
+# ── USB camera capture thread ────────────────────────────────────────────────
+
+def capture_worker(device):
+    """อ่านเฟรมจากกล้อง USB ต่อเนื่อง → encode JPEG → push เข้า raw_output
+    เขียนผ่าน raw_output.write() เหมือน interface เดิมของ picamera2 encoder"""
+    cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        raise RuntimeError(f"เปิดกล้อง {device} ไม่ได้")
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_FRAME_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_FRAME_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    print(f"[cam] เปิดกล้อง USB สำเร็จ: {device}")
+    while True:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            continue
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            raw_output.write(buf.tobytes())
+
+
 # ── HTTP handler ─────────────────────────────────────────────────────────────
 
 class StreamingHandler(BaseHTTPRequestHandler):
@@ -198,26 +232,18 @@ class StreamingHandler(BaseHTTPRequestHandler):
 
 PORT = 8080
 
-picam2 = Picamera2()
-config = picam2.create_video_configuration(
-    main={"size": (1280, 720)},
-    controls={"FrameRate": 30},
-)
-picam2.configure(config)
-picam2.start_recording(MJPEGEncoder(), FileOutput(raw_output))
-
-# เริ่ม detection + overlay threads
+# เริ่ม capture + detection + overlay threads
+cap_thread = threading.Thread(target=capture_worker, args=(CAMERA_DEVICE,), daemon=True)
 det_thread = threading.Thread(target=detection_worker, daemon=True)
 ovl_thread = threading.Thread(target=overlay_worker,   daemon=True)
+cap_thread.start()
 det_thread.start()
 ovl_thread.start()
 
 server = ThreadingHTTPServer(("0.0.0.0", PORT), StreamingHandler)
 
 try:
-    import socket
-    hostname = socket.gethostname()
-    print(f"Camera streaming เริ่มแล้ว")
+    print(f"Camera streaming เริ่มแล้ว (source: {CAMERA_DEVICE})")
     print(f"  ภาพดิบ:    http://<TAILSCALE_IP>:{PORT}/stream")
     print(f"  Detection: http://<TAILSCALE_IP>:{PORT}/detect")
     print(f"  Snapshot:  http://<TAILSCALE_IP>:{PORT}/snapshot")
@@ -225,6 +251,3 @@ try:
     server.serve_forever()
 except KeyboardInterrupt:
     print("\nหยุด streaming")
-finally:
-    picam2.stop_recording()
-    picam2.close()

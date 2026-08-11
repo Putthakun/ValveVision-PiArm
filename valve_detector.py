@@ -8,11 +8,11 @@ import numpy as np
 import cv2
 import onnxruntime as ort
 
-MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "best_v2.onnx")
+MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "Valve_detection_model.onnx")
 INPUT_SIZE  = 640
 CONF_THRESH = 0.10
 IOU_THRESH  = 0.45
-CLASS_NAMES = ["6541", "joob"]   # 6541 = valve body, joob = จุ๊บลม (air chuck)
+CLASS_NAMES = ["valve"]   # โมเดลใหม่ (YOLO11n) มี class เดียว — ตรวจจับ valve รวม ไม่แยก body/joob แล้ว
 
 
 def load_model():
