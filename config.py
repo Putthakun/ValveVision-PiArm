@@ -1,10 +1,12 @@
 # config.py — ตั้งค่าแขนกล 6-DOF
 
 # ── Link Lengths (mm) วัดจาก pivot ถึง pivot ──────────────────────────────
-L1 = 10    # J1 → J2  (ความสูง base ถึง shoulder)
-L2 = 105    # J2 → J3  (shoulder ถึง elbow)
+# วัดจริงจากแขน (Task 2, rebuild 2026-08) — ยืนยันด้วย FK: fk(90,90,90)
+# ให้ z=460 ตรงกับความสูงที่วัดได้จริง (460±2 มม.) ที่ท่าตั้งตรง
+L1 = 25    # J1 → J2  (ความสูง base ถึง shoulder)
+L2 = 105   # J2 → J3  (shoulder ถึง elbow)
 L3 = 140   # J3 → J4  (elbow ถึง wrist)
-L4 = 175   # J4 → ปลาย gripper
+L4 = 190   # J4 → ปลาย gripper
 
 # ── Channel Map (PCA9685) ──────────────────────────────────────────────────
 CHANNEL = {
