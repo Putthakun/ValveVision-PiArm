@@ -1,6 +1,11 @@
 # servo_controller.py
 import time
-from adafruit_servokit import ServoKit
+
+try:
+    from adafruit_servokit import ServoKit
+except ImportError:
+    ServoKit = None   # ให้ import โมดูลนี้สำเร็จเสมอ แม้ไม่มีฮาร์ดแวร์ — arm.py เป็นคนตัดสินใจว่าจะเข้าโหมดจำลอง
+
 from config import INVERT, ZERO_OFFSET, CHANNEL, LIMITS, HOME, SCAN_POSE
 
 PULSE_MIN = 500   # µs
@@ -12,6 +17,8 @@ PULSE_MAX = 2500  # µs
 class ServoController:
 
     def __init__(self):
+        if ServoKit is None:
+            raise RuntimeError("adafruit_servokit ไม่พร้อมใช้งาน — ไม่มีฮาร์ดแวร์ servo จริงในเครื่องนี้")
         self.kit = ServoKit(channels=16)
         for ch in range(6):
             self.kit.servo[ch].set_pulse_width_range(PULSE_MIN, PULSE_MAX)
@@ -29,6 +36,19 @@ class ServoController:
         servo_angle = self._to_servo(joint, logic)
         self.kit.servo[CHANNEL[joint]].angle = servo_angle
 
+    # ─── อ่านตำแหน่งปัจจุบัน ────────────────────────────────────────────
+    def get_angles(self, joints) -> dict:
+        """อ่านตำแหน่งปัจจุบันของ joints ที่ระบุ กลับเป็น logic angle (ย้อน INVERT + ZERO_OFFSET)"""
+        current = {}
+        for joint in joints:
+            ch = CHANNEL[joint]
+            servo_now = self.kit.servo[ch].angle or self._to_servo(joint, 90)
+            logic_now = servo_now - ZERO_OFFSET[joint]
+            if INVERT[joint]:
+                logic_now = 180 - logic_now
+            current[joint] = logic_now
+        return current
+
     # ─── เคลื่อนแบบ smooth ──────────────────────────────────────────────
     def move_smooth(self, target: dict, steps: int = 60, delay: float = 0.02,
                     settle: float = 0.3):
@@ -37,16 +57,7 @@ class ServoController:
         target  : {'J1': logic_angle, ...}
         settle  : รอหลัง step สุดท้าย (วิ) ให้ servo ถึงเป้าจริง
         """
-        # อ่านตำแหน่งปัจจุบันจาก servo (แปลงกลับ)
-        current = {}
-        for joint in target:
-            ch = CHANNEL[joint]
-            servo_now = self.kit.servo[ch].angle or self._to_servo(joint, 90)
-            # แปลง servo → logic (ย้อน INVERT + ZERO_OFFSET)
-            logic_now = servo_now - ZERO_OFFSET[joint]
-            if INVERT[joint]:
-                logic_now = 180 - logic_now
-            current[joint] = logic_now
+        current = self.get_angles(target.keys())
 
         for step in range(1, steps + 1):
             t = step / steps
