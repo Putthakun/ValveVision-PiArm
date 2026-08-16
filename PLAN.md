@@ -225,13 +225,13 @@ tools/measure_repeatability.py วัดความเที่ยงของ�
 - Consumes: `servo_controller.ServoController`, `config.CHANNEL`
 - Produces: ค่า `LIMITS` ที่วัดจริง — ทุก task หลังจากนี้พึ่งพาค่านี้
 
-- [ ] **Step 1: เขียน `tools/find_joint_limits.py`**
+- [x] **Step 1: เขียน `tools/find_joint_limits.py`**
 
 สคริปต์แบบโต้ตอบ: เลือกแกน → กด `+`/`-` ขยับทีละ 1° → กด `[` `]` เปลี่ยนขนาดก้าวเป็น 5° → กด `l` บันทึกขีดล่าง → กด `u` บันทึกขีดบน → กด `n` ไปแกนถัดไป
 รูปแบบการรับปุ่มลอกจาก `setup/step3_calibrate_offsets.py` ที่มีอยู่แล้ว (ใช้ `termios` + `tty`)
 เมื่อจบต้องพิมพ์ dict ที่ก๊อปวางลง `config.py` ได้ทันที และ**หักระยะปลอดภัย 10° เข้ามาจากจุดที่ชนจริงโดยอัตโนมัติ**
 
-- [ ] **Step 2: รันบน Pi แล้ววัดทีละแกน**
+- [x] **Step 2: รันบน Pi แล้ววัดทีละแกน**
 
 ```bash
 ssh pi@<tailscale-host> 'cd ~/ValveVision-PiArm && python tools/find_joint_limits.py'
@@ -240,9 +240,9 @@ ssh pi@<tailscale-host> 'cd ~/ValveVision-PiArm && python tools/find_joint_limit
 ทำ J1 → J2 → J3 → J4 (J5, J6 ไม่ใช้ ปล่อยไว้ (0,180))
 **ขยับช้าๆ ทีละ 1° เมื่อใกล้จุดชน** — ฟังเสียง servo ถ้าเริ่มครางแปลว่าฝืนแล้ว ให้หยุดทันที
 
-- [ ] **Step 3: ก๊อปค่าลง `config.py`**
+- [x] **Step 3: ก๊อปค่าลง `config.py`**
 
-- [ ] **Step 4: คำนวณ workspace ใหม่ด้วยค่าจริง**
+- [x] **Step 4: คำนวณ workspace ใหม่ด้วยค่าจริง**
 
 ```bash
 python3 -c "
@@ -255,7 +255,7 @@ for z in range(40,281,20):
 "
 ```
 
-- [ ] **Step 5: อัปเดตตารางใน `DESIGN.md` หัวข้อ 5 ด้วยตัวเลขจริง แล้ว commit**
+- [x] **Step 5: อัปเดตตารางใน `DESIGN.md` หัวข้อ 5 ด้วยตัวเลขจริง แล้ว commit**
 
 ```bash
 git add config.py tools/find_joint_limits.py DESIGN.md
@@ -273,18 +273,18 @@ git commit -m "feat: วัดขีดจำกัดจริงของแ�
 **Files:**
 - Modify: `config.py` (`L1`–`L4`)
 
-- [ ] **Step 1: จัดแขนให้ตั้งตรง**
+- [x] **Step 1: จัดแขนให้ตั้งตรง**
 
 ```bash
 ssh pi@<host> 'cd ~/ValveVision-PiArm && python setup/step1_home.py'
 ```
 
-- [ ] **Step 2: วัดจากแกนหมุนถึงแกนหมุน 3 ครั้ง เอาค่าเฉลี่ย**
+- [x] **Step 2: วัดจากแกนหมุนถึงแกนหมุน 3 ครั้ง เอาค่าเฉลี่ย**
 
 `L1` = ฐาน(J1) → แกนไหล่(J2) · `L2` = J2 → J3 · `L3` = J3 → J4 · `L4` = J4 → **ปลายสุดของ gripper ที่จะใช้แตะ**
 วัดที่**แกนหมุน** ไม่ใช่ขอบชิ้นส่วน — จุดที่น็อตทะลุผ่านคือแกน
 
-- [ ] **Step 3: ตรวจสอบด้วย forward kinematics**
+- [x] **Step 3: ตรวจสอบด้วย forward kinematics**
 
 ```bash
 python3 -c "from ik_solver import fk; print('ท่าตั้งตรงควรได้ r≈0:', fk(90,90,90))"
@@ -292,7 +292,7 @@ python3 -c "from ik_solver import fk; print('ท่าตั้งตรงค�
 ค่า `z` ที่ได้ต้องเท่ากับ `L1+L2+L3+L4` และ `r` ต้องใกล้ 0
 เอาไม้บรรทัดวัดความสูงปลาย gripper จากฐานจริง เทียบกับตัวเลขนี้ **ต่างกันเกิน 10 มม. = วัดผิด ให้วัดใหม่**
 
-- [ ] **Step 4: commit**
+- [x] **Step 4: commit**
 
 ```bash
 git add config.py && git commit -m "fix: วัดความยาวท่อนแขนใหม่จากของจริง"
@@ -323,7 +323,7 @@ class Arm:
 ```
 `move_to` และ `nudge` คืน `False` เมื่อถูกชั้นความปลอดภัยปฏิเสธ — **ห้ามโยน exception** เพราะเป็นเหตุการณ์ปกติที่ผู้เรียกต้องจัดการ
 
-- [ ] **Step 1: เขียน test ที่ต้องล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ที่ต้องล้มเหลวก่อน**
 
 ```python
 # tests/test_arm.py
@@ -353,14 +353,14 @@ def test_โหมดจำลองไม่ต้องใช้ฮาร์�
     assert abs(r - 350) < 1 and abs(z - 100) < 1
 ```
 
-- [ ] **Step 2: รันให้เห็นว่าล้มเหลว**
+- [x] **Step 2: รันให้เห็นว่าล้มเหลว**
 
 ```bash
 python -m pytest tests/test_arm.py -v
 ```
 คาดว่า: `ModuleNotFoundError: No module named 'arm'`
 
-- [ ] **Step 3: เขียน `arm.py`**
+- [x] **Step 3: เขียน `arm.py`**
 
 ต้องมีครบทุกข้อ:
 1. `simulate=None` → ลอง import `servo_controller` ถ้าล้มเหลวให้เข้าโหมดจำลองเอง พร้อมพิมพ์แจ้ง
@@ -371,14 +371,14 @@ python -m pytest tests/test_arm.py -v
 6. `nudge` เรียก `move_to` โดยบวกส่วนต่างเข้ากับท่าปัจจุบัน **โดยไม่แตะ `pitch`**
 7. โหมดจำลองพิมพ์เป็นภาษาไทยว่าจะสั่งอะไร แล้วจำท่าไว้ใน `self._pose`
 
-- [ ] **Step 4: รัน test ให้ผ่าน**
+- [x] **Step 4: รัน test ให้ผ่าน**
 
 ```bash
 python -m pytest tests/test_arm.py -v
 ```
 คาดว่า: ผ่านทั้ง 5 ข้อ **บน Mac โดยไม่ต้องต่อแขน**
 
-- [ ] **Step 5: ทดสอบบนแขนจริง**
+- [x] **Step 5: ทดสอบบนแขนจริง**
 
 ```bash
 ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
@@ -391,7 +391,7 @@ a.retreat()
 ```
 ดูด้วยตาว่าแขนขยับ**ช้าและนุ่มนวล** ไม่กระตุก
 
-- [ ] **Step 6: commit**
+- [x] **Step 6: commit**
 
 ```bash
 git add arm.py tests/test_arm.py servo_controller.py
@@ -420,7 +420,7 @@ class ReplayCamera(BaseCamera):    # อ่านจากโฟลเดอร�
 def open_cameras(replay_dir: str | None = None) -> tuple[BaseCamera, BaseCamera]
 ```
 
-- [ ] **Step 1: เขียน test**
+- [x] **Step 1: เขียน test**
 
 ```python
 # tests/test_camera.py
@@ -440,21 +440,21 @@ def test_replay_คืน_None_เมื่อโฟลเดอร์ว่า�
     assert ReplayCamera(str(tmp_path)).grab() is None
 ```
 
-- [ ] **Step 2: รันให้ล้มเหลว**
+- [x] **Step 2: รันให้ล้มเหลว**
 
 ```bash
 python -m pytest tests/test_camera.py -v
 ```
 
-- [ ] **Step 3: เขียน `camera.py`**
+- [x] **Step 3: เขียน `camera.py`**
 
 `OverviewCamera` ย้ายโค้ดเปิดกล้อง USB มาจาก `camera_preview.py` (ใช้ `cv2.CAP_V4L2`, ตั้ง `CAP_PROP_BUFFERSIZE=1`)
 `WristCamera` ใช้ `picamera2` แปลง RGB→BGR — **import `picamera2` ในเมธอด ไม่ใช่ระดับโมดูล** เพื่อให้ import ไฟล์นี้บน Mac ได้
 `open_cameras(replay_dir=...)` คืน `ReplayCamera` สองตัวเมื่อระบุโฟลเดอร์ ไม่งั้นคืนกล้องจริง
 
-- [ ] **Step 4: รัน test ให้ผ่าน**
+- [x] **Step 4: รัน test ให้ผ่าน**
 
-- [ ] **Step 5: ทดสอบกล้องจริงบน Pi และตอบคำถามที่ค้างอยู่ 2 ข้อ**
+- [x] **Step 5: ทดสอบกล้องจริงบน Pi และตอบคำถามที่ค้างอยู่ 2 ข้อ**
 
 ```bash
 ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
@@ -480,7 +480,7 @@ scp pi@<host>:/tmp/{overview,wrist}.jpg .
 
 บันทึกคำตอบลง `DESIGN.md` หัวข้อ 11
 
-- [ ] **Step 6: commit**
+- [x] **Step 6: commit**
 
 ```bash
 git add camera.py tests/test_camera.py DESIGN.md
@@ -498,15 +498,15 @@ git commit -m "feat: เพิ่ม camera.py รองรับกล้อง
 **Files:**
 - Create: `tools/test_model_at_range.py`
 
-- [ ] **Step 1: เขียนสคริปต์ถ่ายภาพที่ระยะต่างๆ**
+- [x] **Step 1: เขียนสคริปต์ถ่ายภาพที่ระยะต่างๆ**
 
 รับระยะเป็น argument ถ่ายจากกล้องที่มือ 5 ภาพ บันทึกลง `data/range_test/<ระยะ>cm/`
 
-- [ ] **Step 2: เก็บภาพที่ 12, 15, 20, 30, 40 ซม.**
+- [~] **Step 2: เก็บภาพที่ 12, 15, 20, 30, 40 ซม.**  ← ข้าม: ยืนยันแล้วว่าโมเดลใช้ไม่ได้ (domain gap จาก iPhone)
 
 วัดระยะจากหน้าเลนส์ถึงก้านจุ๊บด้วยไม้บรรทัด ระยะละ 5 ภาพ = 25 ภาพ
 
-- [ ] **Step 3: รันโมเดลเดิมแล้วนับ**
+- [~] **Step 3: รันโมเดลเดิมแล้วนับ**  ← ข้าม: เหตุผลเดียวกับ Step 2
 
 ```bash
 python3 -c "
@@ -524,7 +524,7 @@ for d in ['12','15','20','30','40']:
 "
 ```
 
-- [ ] **Step 4: ตัดสินใจตามผล**
+- [x] **Step 4: ตัดสินใจตามผล**
 
 | ผล | ทำต่อ |
 |---|---|
@@ -555,7 +555,7 @@ git commit -m "test: ทดสอบโมเดลเดิมที่ระ�
 - Consumes: ตาราง workspace จาก Task 1, ค่า `L1`–`L4` จาก Task 2, `arm.Arm` จาก Task 3
 - Produces: เรขาคณิตคงที่ที่ทุก task หลังจากนี้พึ่งพา + เส้นมาร์คพื้น
 
-- [ ] **Step 1: หาจุดที่ควรวางจากตาราง workspace จริง**
+- [x] **Step 1: หาจุดที่ควรวางจากตาราง workspace จริง**
 
 ```bash
 python3 - <<'PY'
@@ -587,12 +587,12 @@ PY
 
 **ใช้ตัวเลขที่สคริปต์นี้บอก ไม่ใช่ r≈350/z≈100 ที่เขียนไว้ใน `DESIGN.md`** — ค่านั้นคำนวณจาก `LIMITS = (0,180)` ที่ยังไม่ได้วัดจริง
 
-- [ ] **Step 2: วัดตำแหน่งวาล์วบนล้อจริง**
+- [x] **Step 2: วัดตำแหน่งวาล์วบนล้อจริง**
 
 วางล้อในท่าที่จะใช้สอบ วัด **ความสูงของก้านจุ๊บจากพื้น** ที่ตำแหน่งนาฬิกา 5, 6, 7, 8, 9
 เอาค่าสูงสุดกับต่ำสุดมาหาค่ากลาง — ฐานแขนต้องวางให้ค่ากลางนี้ตรงกับ `z` ที่ได้จาก Step 1
 
-- [ ] **Step 3: วางฐานแล้ววัดยืนยัน**
+- [x] **Step 3: วางฐานแล้ววัดยืนยัน**
 
 ```
 ความสูงฐาน = ความสูงก้านจุ๊บเฉลี่ยจากพื้น − z ที่ต้องการ
@@ -605,7 +605,7 @@ PY
 ใช้เทปพันสายไฟติดพื้นเป็นมุมฉาก 2 เส้นสำหรับทาบขอบล้อ **และ 2 เส้นสำหรับฐานแขนด้วย**
 เพียงเส้นเดียวไม่พอ — ต้องล็อกทั้งตำแหน่งและการหมุน
 
-- [ ] **Step 5: ยืนยันว่าทุกตำแหน่งนาฬิกาเอื้อมถึงจริง**
+- [x] **Step 5: ยืนยันว่าทุกตำแหน่งนาฬิกาเอื้อมถึงจริง**  ← ยืนยันด้วยการคำนวณ (`best_pitch` ครบ 5 ตำแหน่ง) ยังไม่ได้สั่งแขนไปจริง
 
 ```bash
 ssh pi@<host> 'cd ~/ValveVision-PiArm && python -c "
