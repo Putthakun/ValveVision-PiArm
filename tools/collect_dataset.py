@@ -23,6 +23,7 @@ import math
 import os
 import random
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -56,6 +57,14 @@ N_SCAN_EACH = 3           # ภาพต่อท่าสแกนหนึ่�
 N_NEAR_MAX = 25           # ภาพระยะใกล้สูงสุดต่อรอบ
 N_NEG = 3                 # ภาพลบต่อรอบ
 SCAN_JITTER_DEG = 1.5     # สั่นท่าสแกนเล็กน้อยเพื่อไม่ให้ได้ภาพซ้ำกันเป๊ะ
+
+# ── รอให้แขนนิ่งก่อนถ่าย ────────────────────────────────────────────────
+# servo สั่นต่ออีกพักหนึ่งหลังหยุด ถ้าถ่ายเร็วไปจะได้ภาพเบลอโดยไม่ตั้งใจ
+SETTLE_SEC = 1.2          # รอหลังแขนถึงที่ ก่อนถ่ายใบแรก
+RETRY_WAIT_SEC = 0.6      # ถ้ายังเบลอ รออีกเท่านี้แล้วถ่ายใหม่
+MAX_RETRY = 2
+SHARP_MIN = 60.0          # Laplacian variance ต่ำกว่านี้ถือว่าเบลอ
+                          # (วัดจริงตอน A3: ภาพคมได้ 380 · เกณฑ์เบลอทั่วไป ~50)
 
 # ระยะกล้องถึงจุ๊บที่จะกวาด (มม.) — ตัวที่เอื้อมไม่ถึงจะถูกข้ามอัตโนมัติ
 # ★ ตารางเดิมในแผน (350/280/220/180/150) เอื้อมไม่ถึงเกือบหมด
@@ -129,14 +138,49 @@ def plan_negative_poses(arm: Arm, clock: float):
     return poses[:N_NEG]
 
 
-def grab_and_save(cam, path, warm=2):
-    for _ in range(warm):
-        cam.grab()
-    frame = cam.grab()
-    if frame is None:
-        return False
+def sharpness(frame) -> float:
+    """ความคมชัดของภาพ — ยิ่งสูงยิ่งคม (Laplacian variance)"""
+    return cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+
+
+def grab_sharp(cam, path):
+    """รอให้แขนนิ่ง ถ่าย แล้วตรวจว่าคมจริง ถ้าเบลอให้รอแล้วถ่ายใหม่
+
+    คืน (สำเร็จไหม, ความคม, ถ่ายซ้ำกี่ครั้ง)
+    """
+    time.sleep(SETTLE_SEC)
+    for attempt in range(MAX_RETRY + 1):
+        cam.grab()                     # ทิ้งเฟรมค้างใน buffer
+        frame = cam.grab()
+        if frame is None:
+            return False, 0.0, attempt
+        s = sharpness(frame)
+        if s >= SHARP_MIN or attempt == MAX_RETRY:
+            cv2.imwrite(path, frame)
+            return True, s, attempt
+        time.sleep(RETRY_WAIT_SEC)     # ยังสั่นอยู่ รออีกหน่อย
+    return False, 0.0, MAX_RETRY
+
+
+def grab_during_move(arm, cam, path, r, th, z, pitch):
+    """ถ่ายระหว่างแขนกำลังขยับจริง — ได้ภาพเบลอที่ dataset ต้องมี
+
+    ★ ถ่ายทันทีหลังแขนหยุดไม่พอ — buffer ของกล้องคืนเฟรมเก่าที่นิ่งแล้ว
+      (ลองมาแล้ว ได้ความคม 138 ซึ่งไม่เบลอเลย) ต้องสั่งขยับในเธรดแยก
+      แล้วถ่ายตอนแขนยังวิ่งอยู่จริงๆ
+    """
+    result = {}
+    t = threading.Thread(target=lambda: result.update(ok=arm.move_to(r, th, z, pitch)))
+    t.start()
+    time.sleep(0.35)          # ให้แขนเริ่มออกตัวก่อน
+    cam.grab()                # ทิ้งเฟรมค้าง
+    frame = cam.grab()        # เฟรมนี้ถ่ายตอนแขนยังขยับ
+    t.join()
+
+    if not result.get('ok') or frame is None:
+        return False, 0.0
     cv2.imwrite(path, frame)
-    return True
+    return True, sharpness(frame)
 
 
 def collect_round(arm, cam, clock, light, near_poses, neg_poses):
@@ -144,6 +188,9 @@ def collect_round(arm, cam, clock, light, near_poses, neg_poses):
     out_dir = os.path.join(OUT_ROOT, session)
     os.makedirs(out_dir, exist_ok=True)
     n = 0
+
+    blurry_retries = 0     # จำนวนครั้งที่ต้องถ่ายซ้ำเพราะยังสั่น
+    soft = 0               # ภาพที่ยังไม่คมแม้ถ่ายซ้ำครบแล้ว
 
     def path(kind):
         nonlocal n
@@ -155,30 +202,46 @@ def collect_round(arm, cam, clock, light, near_poses, neg_poses):
         for i in range(N_SCAN_EACH):
             # ใบแรกใช้ท่าจริง ใบต่อไปสั่นเล็กน้อยกันภาพซ้ำกันเป๊ะ
             arm.go_scan_pose(upper=upper, jitter_deg=0.0 if i == 0 else SCAN_JITTER_DEG)
-            time.sleep(0.4)
-            grab_and_save(cam, path(tag))
+            ok, s, retry = grab_sharp(cam, path(tag))
+            if retry:
+                blurry_retries += retry
+            if ok and s < SHARP_MIN:
+                soft += 1
     print(f'    ท่าสแกน {N_SCAN_EACH * 2} ใบ', end='', flush=True)
 
     # ── ภาพระยะใกล้ ─────────────────────────────────────────────────────
     blurred = 0
+    blur_sharp = []
     for i, (r, th, z, pitch, dist) in enumerate(near_poses):
+        # ทุกใบที่ 4 ถ่ายทันทีระหว่างแขนยังไม่นิ่ง → ภาพเบลอที่ dataset ต้องมี
+        # ตั้งชื่อ nearblur เพื่อให้แยกออกตอน label ว่าใบไหนเบลอโดยตั้งใจ
+        if i % 4 == 3:
+            ok, s = grab_during_move(arm, cam, path('nearblur'), r, th, z, pitch)
+            if ok:
+                blurred += 1
+                blur_sharp.append(s)
+            continue
         if not arm.move_to(r, th, z, pitch):
             continue
-        # ทุกใบที่ 4 ถ่ายทันทีระหว่างแขนยังไม่นิ่ง → ได้ภาพเบลอที่ต้องมีใน dataset
-        if i % 4 == 3:
-            grab_and_save(cam, path('near'), warm=0)
-            blurred += 1
-        else:
-            time.sleep(0.5)
-            grab_and_save(cam, path('near'))
-    print(f' · ระยะใกล้ {len(near_poses)} ใบ (เบลอ {blurred})', end='', flush=True)
+        ok, s, retry = grab_sharp(cam, path('near'))
+        blurry_retries += retry
+        if ok and s < SHARP_MIN:
+            soft += 1
+    blur_note = f' ความคมเฉลี่ย {sum(blur_sharp)/len(blur_sharp):.0f}' if blur_sharp else ''
+    print(f' · ระยะใกล้ {len(near_poses)} ใบ (ตั้งใจเบลอ {blurred}{blur_note})', end='', flush=True)
 
     # ── ภาพลบ ───────────────────────────────────────────────────────────
     for r, th, z, pitch in neg_poses:
         if arm.move_to(r, th, z, pitch):
-            time.sleep(0.5)
-            grab_and_save(cam, path('neg'))
+            ok, s, retry = grab_sharp(cam, path('neg'))
+            blurry_retries += retry
+            if ok and s < SHARP_MIN:
+                soft += 1
     print(f' · ภาพลบ {len(neg_poses)} ใบ')
+    if blurry_retries:
+        print(f'    (ถ่ายซ้ำเพราะยังสั่น {blurry_retries} ครั้ง)')
+    if soft:
+        print(f'    ⚠ ยังไม่คม {soft} ใบแม้ถ่ายซ้ำครบ — ถ้าเยอะ ลองเพิ่ม SETTLE_SEC')
 
     arm.go_scan_pose()
     return n, out_dir
