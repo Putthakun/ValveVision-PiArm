@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+# tools/collect_dataset.py — แขนกวาดเก็บภาพ dataset เอง (Task 6)
+#
+# คนทำแค่: หมุนล้อไปตำแหน่งนาฬิกา · สลับไฟ · ขยับล้อเล็กน้อยในกรอบเทป
+# ที่เหลือสคริปต์ทำเอง
+#
+# วิธีใช้ — หมุนล้อครั้งเดียว เก็บครบทั้ง 4 สภาพแสง:
+#   python3 tools/collect_dataset.py --clock 6
+#
+# เก็บเฉพาะบางสภาพแสง:
+#   python3 tools/collect_dataset.py --clock 6 --lights day,room
+#
+# ดูว่าจะถ่ายกี่ภาพโดยไม่ขยับแขน:
+#   python3 tools/collect_dataset.py --clock 6 --dry-run
+#
+# ภาพเก็บที่ data/raw/<clock>_<light>/  ชื่อไฟล์ <clock>_<light>_<ลำดับ>_<ชนิด>.jpg
+#   ชนิด = scanA (ท่าสแกนครึ่งล่าง) · scanB (ครึ่งบน) · near (ระยะใกล้) · neg (ภาพลบ)
+#
+# ★ ชื่อโฟลเดอร์คือ "รอบการเก็บ" ซึ่งใช้แบ่ง train/val — ห้ามสุ่มแบ่งรายภาพ
+
+import argparse
+import os
+import random
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import cv2
+
+from arm import Arm
+from camera import WristCamera
+from geometry import valve_pose
+
+OUT_ROOT = 'data/raw'
+LIGHTS = ['day', 'room', 'dim', 'torch']
+LIGHT_NAMES = {
+    'day': 'กลางวัน (เปิดผ้าม่าน ปิดไฟห้อง)',
+    'room': 'ไฟห้องปกติ',
+    'dim': 'ไฟสลัว (ปิดไฟหลัก เหลือไฟอ่อน)',
+    'torch': 'ไฟฉายส่องจากด้านข้าง',
+}
+
+CAM_BACK_MM = 78.0        # กล้องอยู่หลังปลาย gripper ประมาณเท่านี้ (ประมาณจากภาพ)
+N_SCAN_EACH = 3           # ภาพต่อท่าสแกนหนึ่งท่า (A และ B อย่างละ 3 = 6)
+N_NEAR_MAX = 25           # ภาพระยะใกล้สูงสุดต่อรอบ
+N_NEG = 3                 # ภาพลบต่อรอบ
+SCAN_JITTER_DEG = 1.5     # สั่นท่าสแกนเล็กน้อยเพื่อไม่ให้ได้ภาพซ้ำกันเป๊ะ
+
+# ระยะกล้องถึงจุ๊บที่จะกวาด (มม.) — ตัวที่เอื้อมไม่ถึงจะถูกข้ามอัตโนมัติ
+# ★ ตารางเดิมในแผน (350/280/220/180/150) เอื้อมไม่ถึงเกือบหมด
+#   ระยะที่ทำได้จริงคือ ~90–220 มม. และที่ 6 นาฬิกาได้แค่ ~90–140
+NEAR_DISTANCES = [100, 120, 140, 170, 200]
+
+# ส่วนต่างมุม/ความสูงรอบจุดเป้า เพื่อให้มุมมองหลากหลาย (dtheta องศา, dz มม.)
+NEAR_OFFSETS = [
+    (0, 0), (4, 0), (-4, 0), (0, 15), (0, -15),
+    (3, 10), (-3, 10), (3, -10), (-3, -10),
+]
+
+
+def clock_tag(clock: float) -> str:
+    """6 → '06' · 6.5 → '065' — ใช้เป็นส่วนหนึ่งของชื่อรอบ"""
+    return f'{clock:g}'.replace('.', '')
+
+
+def plan_near_poses(arm: Arm, clock: float):
+    """สร้างรายการท่าระยะใกล้ที่ 'เอื้อมถึงจริง' — ท่าที่ IK ปฏิเสธจะไม่อยู่ในลิสต์"""
+    r0, th0, z0 = valve_pose(clock)
+    poses = []
+    for dist in NEAR_DISTANCES:
+        r_base = r0 + CAM_BACK_MM - dist
+        for dth, dz in NEAR_OFFSETS:
+            r, th, z = r_base, th0 + dth, z0 + dz
+            pitch = arm.best_pitch(r, th, z)
+            if pitch is not None:
+                poses.append((r, th, z, pitch, dist))
+    random.shuffle(poses)
+    return poses[:N_NEAR_MAX]
+
+
+def plan_negative_poses(arm: Arm, clock: float):
+    """ท่าเล็งไปที่ขอบล้อที่ 'ไม่มีจุ๊บ' — ได้ภาพรูระบายอากาศกับน็อตล้อเป็นภาพลบ
+
+    เล็งไปตำแหน่งนาฬิกาที่ห่างจากจุ๊บ 4-5 ชั่วโมง เพื่อให้แน่ใจว่าจุ๊บไม่ติดมาในเฟรม
+    """
+    poses = []
+    for offset in (4, -4, 5):
+        r, th, z = valve_pose((clock + offset - 1) % 12 + 1)
+        r = r + CAM_BACK_MM - 130
+        pitch = arm.best_pitch(r, th, z)
+        if pitch is not None:
+            poses.append((r, th, z, pitch))
+    return poses[:N_NEG]
+
+
+def grab_and_save(cam, path, warm=2):
+    for _ in range(warm):
+        cam.grab()
+    frame = cam.grab()
+    if frame is None:
+        return False
+    cv2.imwrite(path, frame)
+    return True
+
+
+def collect_round(arm, cam, clock, light, near_poses, neg_poses):
+    session = f'{clock_tag(clock)}_{light}'
+    out_dir = os.path.join(OUT_ROOT, session)
+    os.makedirs(out_dir, exist_ok=True)
+    n = 0
+
+    def path(kind):
+        nonlocal n
+        n += 1
+        return os.path.join(out_dir, f'{session}_{n:03d}_{kind}.jpg')
+
+    # ── ภาพที่ท่าสแกน — ท่า A และ B อย่างละ N_SCAN_EACH ─────────────────
+    for tag, upper in (('scanA', False), ('scanB', True)):
+        for i in range(N_SCAN_EACH):
+            # ใบแรกใช้ท่าจริง ใบต่อไปสั่นเล็กน้อยกันภาพซ้ำกันเป๊ะ
+            arm.go_scan_pose(upper=upper, jitter_deg=0.0 if i == 0 else SCAN_JITTER_DEG)
+            time.sleep(0.4)
+            grab_and_save(cam, path(tag))
+    print(f'    ท่าสแกน {N_SCAN_EACH * 2} ใบ', end='', flush=True)
+
+    # ── ภาพระยะใกล้ ─────────────────────────────────────────────────────
+    blurred = 0
+    for i, (r, th, z, pitch, dist) in enumerate(near_poses):
+        if not arm.move_to(r, th, z, pitch):
+            continue
+        # ทุกใบที่ 4 ถ่ายทันทีระหว่างแขนยังไม่นิ่ง → ได้ภาพเบลอที่ต้องมีใน dataset
+        if i % 4 == 3:
+            grab_and_save(cam, path('near'), warm=0)
+            blurred += 1
+        else:
+            time.sleep(0.5)
+            grab_and_save(cam, path('near'))
+    print(f' · ระยะใกล้ {len(near_poses)} ใบ (เบลอ {blurred})', end='', flush=True)
+
+    # ── ภาพลบ ───────────────────────────────────────────────────────────
+    for r, th, z, pitch in neg_poses:
+        if arm.move_to(r, th, z, pitch):
+            time.sleep(0.5)
+            grab_and_save(cam, path('neg'))
+    print(f' · ภาพลบ {len(neg_poses)} ใบ')
+
+    arm.go_scan_pose()
+    return n, out_dir
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--clock', type=float, required=True, help='ตำแหน่งนาฬิกาของจุ๊บ (1-12 รับทศนิยม)')
+    ap.add_argument('--lights', default=','.join(LIGHTS), help='สภาพแสงที่จะเก็บ คั่นด้วยคอมมา')
+    ap.add_argument('--dry-run', action='store_true', help='คำนวณอย่างเดียว ไม่ขยับแขน ไม่ถ่ายภาพ')
+    args = ap.parse_args()
+
+    lights = [l.strip() for l in args.lights.split(',') if l.strip()]
+    for l in lights:
+        if l not in LIGHTS:
+            print(f'✗ สภาพแสง "{l}" ไม่รู้จัก (ต้องเป็น {", ".join(LIGHTS)})')
+            sys.exit(1)
+
+    arm = Arm(simulate=True) if args.dry_run else Arm()
+    near = plan_near_poses(arm, args.clock)
+    neg = plan_negative_poses(arm, args.clock)
+    per_round = N_SCAN_EACH * 2 + len(near) + len(neg)
+
+    r0, th0, z0 = valve_pose(args.clock)
+    print('=' * 62)
+    print(f'เก็บ dataset — จุ๊บที่ {args.clock:g} นาฬิกา')
+    print(f'  ตำแหน่งจุ๊บ: r={r0:.0f} มม. · theta={th0:.0f}° · z={z0:+.0f} มม.')
+    print(f'  ท่าระยะใกล้ที่เอื้อมถึง {len(near)} จาก {len(NEAR_DISTANCES)*len(NEAR_OFFSETS)} ท่าที่วางแผนไว้')
+    if near:
+        ds = sorted({p[4] for p in near})
+        print(f'  ระยะที่ใช้ได้: {", ".join(str(d) for d in ds)} มม.')
+    print(f'  ภาพต่อรอบ {per_round} ใบ × {len(lights)} สภาพแสง = {per_round*len(lights)} ใบ')
+    print('=' * 62)
+
+    if args.dry_run:
+        print('\n(dry-run — ไม่ได้ขยับแขนและไม่ได้ถ่ายภาพ)')
+        return
+    if not near:
+        print('\n✗ ไม่มีท่าระยะใกล้ที่เอื้อมถึงเลย — ตรวจเรขาคณิตใน geometry.py')
+        sys.exit(1)
+
+    cam = WristCamera()
+    for _ in range(15):     # warm-up ให้ auto-exposure ปรับตัว
+        cam.grab()
+        time.sleep(0.1)
+
+    total = 0
+    try:
+        for light in lights:
+            print(f'\n[{LIGHT_NAMES[light]}]')
+            input('  1) ตั้งสภาพแสง  2) ขยับล้อเล็กน้อยในกรอบเทป  แล้วกด Enter ... ')
+            n, out_dir = collect_round(arm, cam, args.clock, light, near, neg)
+            total += n
+            print(f'    → {n} ใบ ที่ {out_dir}')
+    except KeyboardInterrupt:
+        print('\n  หยุดกลางคัน')
+    finally:
+        cam.close()
+        arm.go_scan_pose()
+
+    print(f'\nรวม {total} ใบ · กลับท่าสแกนแล้ว')
+    print(f'ตรวจภาพก่อนเก็บรอบต่อไป:  ls {OUT_ROOT}/{clock_tag(args.clock)}_*/')
+
+
+if __name__ == '__main__':
+    main()

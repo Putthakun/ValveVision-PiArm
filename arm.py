@@ -7,8 +7,9 @@
 #   pitch_deg คือ gripper_pitch ใน ik_solver (0 = แนวนอน)
 
 import math
+import random
 
-from config import LIMITS, HOME, SCAN_POSE
+from config import LIMITS, HOME, SCAN_POSE, SCAN_POSE_UPPER
 from ik_solver import solve_ik, fk
 
 R_MAX_COMMAND = 420        # มม. — กันสั่งเลยขอบ workspace แม้ solve_ik จะหาคำตอบได้ (โซนขอบเปราะบาง)
@@ -107,15 +108,32 @@ class Arm:
         return p['r'], p['theta_deg'], p['z'], p['pitch_deg']
 
     # ─── ท่าสำเร็จรูป ────────────────────────────────────────────────────
-    def go_scan_pose(self) -> None:
-        if self.simulate:
-            print(f"[Arm][จำลอง] จะสั่งไปท่าสแกน SCAN_POSE = {SCAN_POSE}")
-            self._sim_joints.update(SCAN_POSE)
-        else:
-            self._servo.move_to_scan_pose()
+    def go_scan_pose(self, upper: bool = False, jitter_deg: float = 0.0) -> None:
+        """ไปท่าสแกน — upper=False คือท่า A (ครึ่งล่าง) · True คือท่า B (ครึ่งบน)
 
-        r0, z0 = fk(SCAN_POSE['J2'], SCAN_POSE['J3'], SCAN_POSE['J4'])
-        self._pose = {'r': r0, 'theta_deg': SCAN_POSE['J1'], 'z': z0, 'pitch_deg': 0.0}
+        jitter_deg : สั่ง J1/J2 เพี้ยนแบบสุ่มไม่เกินกี่องศา (ใช้ตอนเก็บ dataset
+                     เพื่อไม่ให้ได้ภาพซ้ำกันเป๊ะ — ตอนใช้งานจริงปล่อยเป็น 0)
+
+        ★ ท่าสแกนอยู่นอก LIMITS โดยตั้งใจ (ดูเหตุผลใน config.py) จึงไม่ผ่าน
+          การตรวจขีดจำกัดเหมือน move_to() — ใช้ได้เฉพาะกับสองท่านี้ที่ยืนยัน
+          ด้วยการทดลองจริงแล้วว่าปลอดภัย ห้ามเปิดทางให้ส่งท่าอะไรก็ได้เข้ามา
+        """
+        base = SCAN_POSE_UPPER if upper else SCAN_POSE
+        pose = dict(base)
+        if jitter_deg:
+            pose['J1'] += random.uniform(-jitter_deg, jitter_deg)
+            pose['J2'] += random.uniform(-jitter_deg, jitter_deg)
+
+        name = 'B (ครึ่งบน)' if upper else 'A (ครึ่งล่าง)'
+        if self.simulate:
+            print(f"[Arm][จำลอง] จะสั่งไปท่าสแกน {name} = "
+                  f"{ {k: round(v, 1) for k, v in pose.items()} }")
+            self._sim_joints.update(pose)
+        else:
+            self._servo.move_smooth(pose, steps=60, delay=STEP_DELAY_SEC)
+
+        r0, z0 = fk(pose['J2'], pose['J3'], pose['J4'])
+        self._pose = {'r': r0, 'theta_deg': pose['J1'], 'z': z0, 'pitch_deg': 0.0}
 
     def retreat(self) -> None:
         """แตะแล้วถอยทันที — ถอย r เข้าหาฐาน ไม่ค้างดันของแข็ง (กฎข้อ 5)"""
