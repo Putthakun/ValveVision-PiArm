@@ -19,6 +19,7 @@
 # ★ ชื่อโฟลเดอร์คือ "รอบการเก็บ" ซึ่งใช้แบ่ง train/val — ห้ามสุ่มแบ่งรายภาพ
 
 import argparse
+import math
 import os
 import random
 import sys
@@ -28,7 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cv2
 
-from arm import Arm
+from arm import Arm, _polar_to_xy
+from ik_solver import solve_ik
 from camera import WristCamera
 from geometry import valve_pose
 
@@ -42,6 +44,14 @@ LIGHT_NAMES = {
 }
 
 CAM_BACK_MM = 78.0        # กล้องอยู่หลังปลาย gripper ประมาณเท่านี้ (ประมาณจากภาพ)
+
+# ★ กล้องติดเอียงจากแกน gripper — วัดจริง 2026-08 ที่จุ๊บ 6 นาฬิกา 3 ระยะ
+#   จุ๊บไปตกที่ (457, 587) แทนที่จะเป็นกลางเฟรม (640, 360) เหมือนกันทุกระยะ
+#   = เยื้องเชิงมุม ~15° แนวนอน · ~22° แนวตั้ง (ไม่ใช่เยื้องเชิงระยะ)
+#
+#   ตอนเก็บ dataset ไม่ต้องแก้ — จุ๊บยังอยู่ในเฟรมและคมชัด อีกทั้งการที่จุ๊บ
+#   ไม่อยู่กลางเฟรมเป๊ะทุกใบยังดีต่อการเทรนด้วย
+#   ★ แต่ fine.py (Task 10) ต้องรู้ค่านี้ ไม่งั้นจะเล็งพลาดตั้งแต่ก้าวแรก
 N_SCAN_EACH = 3           # ภาพต่อท่าสแกนหนึ่งท่า (A และ B อย่างละ 3 = 6)
 N_NEAR_MAX = 25           # ภาพระยะใกล้สูงสุดต่อรอบ
 N_NEG = 3                 # ภาพลบต่อรอบ
@@ -52,11 +62,12 @@ SCAN_JITTER_DEG = 1.5     # สั่นท่าสแกนเล็กน้�
 #   ระยะที่ทำได้จริงคือ ~90–220 มม. และที่ 6 นาฬิกาได้แค่ ~90–140
 NEAR_DISTANCES = [100, 120, 140, 170, 200]
 
-# ส่วนต่างมุม/ความสูงรอบจุดเป้า เพื่อให้มุมมองหลากหลาย (dtheta องศา, dz มม.)
-NEAR_OFFSETS = [
-    (0, 0), (4, 0), (-4, 0), (0, 15), (0, -15),
-    (3, 10), (-3, 10), (3, -10), (-3, -10),
-]
+# มุม pitch ที่จะกวาด — แต่ละค่าคือ "มุมที่กล้องมองจุ๊บ" คนละมุมกัน
+# กวาดหลายมุมเพื่อให้ dataset มีมุมมองหลากหลาย
+NEAR_PITCHES = [-20, -10, 0, 10, 20, 30, 40, 50]
+
+# เยื้องซ้าย-ขวาเล็กน้อย ให้จุ๊บไม่อยู่กลางเฟรมเป๊ะทุกใบ (องศาของ theta)
+NEAR_DTHETA = [0, 5, -5]
 
 
 def clock_tag(clock: float) -> str:
@@ -65,16 +76,36 @@ def clock_tag(clock: float) -> str:
 
 
 def plan_near_poses(arm: Arm, clock: float):
-    """สร้างรายการท่าระยะใกล้ที่ 'เอื้อมถึงจริง' — ท่าที่ IK ปฏิเสธจะไม่อยู่ในลิสต์"""
-    r0, th0, z0 = valve_pose(clock)
+    """สร้างรายการท่าระยะใกล้ที่ 'กล้องเล็งไปที่จุ๊บจริง' และเอื้อมถึง
+
+    ★ ห้ามใช้ arm.best_pitch() ที่นี่ — มันเลือก pitch จากระยะขยับ joint ที่เหลือ
+      ไม่ได้สนว่ากล้องจะหันไปทางไหน ผลคือ gripper (และกล้องที่อยู่หลัง) ชี้ก้มลงพื้น
+      เก็บภาพมาได้แต่ขอบล้อกับพื้น ไม่เห็นจุ๊บ (เจอจริงตอนทดลองรอบแรก)
+
+    วิธีที่ถูก: วางปลายแขนไว้ "บนแนวแกน gripper ที่ลากผ่านจุ๊บ" — กล้องซึ่งอยู่
+    หลังปลายแขนบนแกนเดียวกันจึงเล็งตรงไปที่จุ๊บโดยอัตโนมัติ
+
+        แกน gripper ที่ pitch = beta ชี้ไปทาง (cos beta, -sin beta) ในระนาบ (r, z)
+        ถอยจากจุ๊บมาตามแกนนั้นเป็นระยะ s:
+            r_tcp = r_valve - s*cos(beta)
+            z_tcp = z_valve + s*sin(beta)
+        กล้องอยู่ถัดไปอีก CAM_BACK_MM บนแกนเดียวกัน → ระยะกล้องถึงจุ๊บ = s + CAM_BACK_MM
+    """
+    r_v, th_v, z_v = valve_pose(clock)
     poses = []
     for dist in NEAR_DISTANCES:
-        r_base = r0 + CAM_BACK_MM - dist
-        for dth, dz in NEAR_OFFSETS:
-            r, th, z = r_base, th0 + dth, z0 + dz
-            pitch = arm.best_pitch(r, th, z)
-            if pitch is not None:
-                poses.append((r, th, z, pitch, dist))
+        s = dist - CAM_BACK_MM          # ระยะจากปลาย gripper ถึงจุ๊บ
+        if s < 15:                       # ใกล้เกินจนเสี่ยงชนจุ๊บ
+            continue
+        for pitch in NEAR_PITCHES:
+            b = math.radians(pitch)
+            r = r_v - s * math.cos(b)
+            z = z_v + s * math.sin(b)
+            for dth in NEAR_DTHETA:
+                th = th_v + dth
+                # ★ ต้องใช้ pitch ตัวเดียวกับที่ใช้คำนวณตำแหน่ง ไม่ใช่ best_pitch
+                if solve_ik(*_polar_to_xy(r, th), z, float(pitch)) is not None:
+                    poses.append((r, th, z, float(pitch), dist))
     random.shuffle(poses)
     return poses[:N_NEAR_MAX]
 
@@ -86,11 +117,15 @@ def plan_negative_poses(arm: Arm, clock: float):
     """
     poses = []
     for offset in (4, -4, 5):
-        r, th, z = valve_pose((clock + offset - 1) % 12 + 1)
-        r = r + CAM_BACK_MM - 130
-        pitch = arm.best_pitch(r, th, z)
-        if pitch is not None:
-            poses.append((r, th, z, pitch))
+        r_v, th_v, z_v = valve_pose((clock + offset - 1) % 12 + 1)
+        s = 130 - CAM_BACK_MM
+        for pitch in (0, 15, -15, 30, -30, 45):     # ใช้มุมแรกที่เอื้อมถึง
+            b = math.radians(pitch)
+            r = r_v - s * math.cos(b)
+            z = z_v + s * math.sin(b)
+            if solve_ik(*_polar_to_xy(r, th_v), z, float(pitch)) is not None:
+                poses.append((r, th_v, z, float(pitch)))
+                break
     return poses[:N_NEG]
 
 
@@ -171,7 +206,7 @@ def main():
     print('=' * 62)
     print(f'เก็บ dataset — จุ๊บที่ {args.clock:g} นาฬิกา')
     print(f'  ตำแหน่งจุ๊บ: r={r0:.0f} มม. · theta={th0:.0f}° · z={z0:+.0f} มม.')
-    print(f'  ท่าระยะใกล้ที่เอื้อมถึง {len(near)} จาก {len(NEAR_DISTANCES)*len(NEAR_OFFSETS)} ท่าที่วางแผนไว้')
+    print(f'  ท่าระยะใกล้ที่เอื้อมถึง {len(near)} จาก {len(NEAR_DISTANCES)*len(NEAR_PITCHES)*len(NEAR_DTHETA)} ท่าที่วางแผนไว้')
     if near:
         ds = sorted({p[4] for p in near})
         print(f'  ระยะที่ใช้ได้: {", ".join(str(d) for d in ds)} มม.')
