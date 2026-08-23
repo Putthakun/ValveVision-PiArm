@@ -185,7 +185,14 @@ def main():
         print('\n✗ ไม่มีท่าระยะใกล้ที่เอื้อมถึงเลย — ตรวจเรขาคณิตใน geometry.py')
         sys.exit(1)
 
-    cam = WristCamera()
+    try:
+        cam = WristCamera()
+    except Exception as e:
+        print(f'\n✗ เปิดกล้องไม่ได้: {e}')
+        print('  สาเหตุที่พบบ่อยที่สุด: มีสคริปต์อื่นจับกล้องอยู่ (เช่น tools/preview_cameras.py)')
+        print('  ปิดด้วย:  pkill -f preview_cameras.py')
+        sys.exit(1)
+
     for _ in range(15):     # warm-up ให้ auto-exposure ปรับตัว
         cam.grab()
         time.sleep(0.1)
