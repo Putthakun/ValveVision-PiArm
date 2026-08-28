@@ -10,7 +10,11 @@ import onnxruntime as ort
 
 MODEL_PATH  = os.path.join(os.path.dirname(__file__), "models", "Valve_detection_model.onnx")
 INPUT_SIZE  = 640
-CONF_THRESH = 0.10
+# ★ 2026-08-28: หาจากกราฟ precision-recall ของโมเดลที่เทรนใหม่ (เดิมคือ 0.10 ที่ตั้งมั่วไว้)
+#   ที่ค่านี้ precision 0.85 · recall 0.947 — จุดที่ recall สูงสุดโดย precision ยังไม่พัง
+#   ยอม precision ต่ำได้เพราะยังมีตัวกรองซ้ำ (ผลตรวจจับที่ไม่อยู่บนรัศมีวงจุ๊บถูกตัดทิ้ง)
+#   ⚠ ค่านี้มาจากชุดวัดที่ split ยังรั่ว ตัวเลขจริงน่าจะแย่กว่านี้เล็กน้อย — รอเทรนรอบใหม่ยืนยัน
+CONF_THRESH = 0.15
 IOU_THRESH  = 0.45
 CLASS_NAMES = ["valve"]   # โมเดลใหม่ (YOLO11n) มี class เดียว — ตรวจจับ valve รวม ไม่แยก body/joob แล้ว
 

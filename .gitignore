@@ -212,3 +212,9 @@ __marimo__/
 
 # ภาพ dataset — ไม่ commit เข้า repo (ใหญ่เกินและ regenerate ได้)
 /data/
+
+# ผลการเทรนที่ดึงมาจาก Colab (ใหญ่และ regenerate ได้)
+/training/
+
+# ไฟล์สำรองโมเดลที่ tools/fetch_colab_result.sh --install สร้าง
+*.bak-*
