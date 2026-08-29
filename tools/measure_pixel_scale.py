@@ -43,6 +43,21 @@ DTHETA_DEG = 3.0          # ขยับ theta เท่านี้ต่อก
 DZ_MM = 10.0              # ขยับ z เท่านี้
 SETTLE_SEC = 1.2          # รอให้แขนนิ่งก่อนถ่าย (servo สั่นต่อหลังหยุด)
 
+# ★ ค่าชดเชยความเอียงของกล้องจากแกน gripper — วัดจริง 2026-08 ที่จุ๊บ 7.8 นาฬิกา
+#
+#   สูตรเรขาคณิตวางปลายแขนบนแนวแกน gripper ที่ลากผ่านจุ๊บ ซึ่งควรทำให้กล้อง
+#   (ที่อยู่หลังบนแกนเดียวกัน) เล็งตรงไปที่จุ๊บ — แต่ของจริงกล้องเล็งไปที่ "ดุมล้อ"
+#   เพราะตัวกล้องติดเอียงจากแกน gripper
+#
+#   กวาด theta หาค่าจริง: เจอจุ๊บที่ dtheta -5 ถึง -30 · ดีสุดที่ -20 (conf 0.73)
+#   → ต้องเล็ง theta "น้อยกว่า" ตำแหน่งจุ๊บ 20 องศา กล้องถึงจะเห็น
+#
+#   ⚠️ ยังไม่ได้ยืนยันว่าค่านี้คงที่ทุกตำแหน่งนาฬิกาและทุกระยะ
+#      ถ้าเป็นการ "เยื้องเชิงมุม" จะคงที่ · ถ้าเป็น "เยื้องเชิงระยะ" จะเปลี่ยนตามระยะ
+#      ต้องวัดซ้ำที่ตำแหน่งอื่นก่อนเชื่อ (ดูหมายเหตุใน DESIGN.md)
+CAM_YAW_OFFSET_DEG = -20.0
+CAM_DZ_OFFSET_MM = -40.0     # ดันจุ๊บขึ้นจากขอบล่างของเฟรม
+
 
 def detect_valve(cam, sess, inp, out):
     """คืนจุดกึ่งกลางกรอบของจุ๊บที่มั่นใจที่สุด หรือ None ถ้าหาไม่เจอ"""
@@ -71,8 +86,10 @@ def start_pose(clock: float, dist: float):
         b = math.radians(pitch)
         r = r_v - s * math.cos(b)
         z = z_v + s * math.sin(b)
-        if solve_ik(*_polar_to_xy(r, th_v), z, float(pitch)) is not None:
-            return r, th_v, z, float(pitch)
+        th = th_v + CAM_YAW_OFFSET_DEG
+        z += CAM_DZ_OFFSET_MM
+        if solve_ik(*_polar_to_xy(r, th), z, float(pitch)) is not None:
+            return r, th, z, float(pitch)
     return None
 
 
@@ -173,8 +190,14 @@ def main():
     spread_y = (max(abs(b) for _, b, _, _ in results) / min(abs(b) for _, b, _, _ in results) - 1) * 100
     print(f'\nเฉลี่ย: deg_per_px_x = {ax:+.5f}   mm_per_px_y = {ay:+.4f}')
     print(f'กระจาย: x {spread_x:.0f}%  y {spread_y:.0f}%   (เกณฑ์ผ่านคือไม่เกิน 20%)')
+
+    # ★ ไม่เขียนไฟล์ถ้าไม่ผ่านเกณฑ์ — ค่าคาลิเบรตที่มั่วแล้วหลุดไปให้ fine.py ใช้
+    #   คือบั๊กแบบเดียวกับ solve_ik_clamped เดิม: ระบบเดินต่อได้โดยไม่มีสัญญาณว่าผิด
     if spread_x > 20 or spread_y > 20:
-        print('⚠ กระจายเกิน 20% — ใช้ได้แต่ควรวัดซ้ำ')
+        print(f'\n✗ กระจายเกินเกณฑ์ 20% — ไม่เขียน {OUT_JSON}')
+        print('  ค่าที่ไม่นิ่งขนาดนี้ถ้าเอาไปใช้ ลูปเฟสละเอียดจะแกว่งหรือวิ่งหนีเป้า')
+        print('  ลองวัดซ้ำที่ระยะอื่น หรือเพิ่ม --rounds')
+        sys.exit(1)
 
     data = {
         'deg_per_px_x': round(ax, 6),
