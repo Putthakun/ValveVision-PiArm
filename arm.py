@@ -61,6 +61,11 @@ class Arm:
             'z': z0,
             'pitch_deg': 0.0,
         }
+        # ★ ท่าสแกนใช้มุม joint นอก LIMITS โดยตั้งใจ ซึ่ง solve_ik แก้ไม่ได้
+        #   จึงบอกไว้ว่าท่าปัจจุบัน "สร้างซ้ำด้วย IK ไม่ได้" — nudge() ต้องปฏิเสธ
+        #   ไม่ใช่ปล่อยให้ move_to ล้มเหลวเงียบๆ (เคยทำให้วัด pixel scale ได้ค่าขยะ
+        #   เพราะแขนไม่ขยับจริงแต่โค้ดเดินต่อเหมือนไม่มีอะไรเกิดขึ้น)
+        self._pose_ik_valid = False
 
     # ─── เคลื่อนที่ ──────────────────────────────────────────────────────
     def move_to(self, r: float, theta_deg: float, z: float, pitch_deg: float) -> bool:
@@ -76,10 +81,15 @@ class Arm:
 
         self._move_joints(angles)
         self._pose = {'r': r, 'theta_deg': theta_deg, 'z': z, 'pitch_deg': pitch_deg}
+        self._pose_ik_valid = True      # ท่านี้มาจาก IK จึง nudge ต่อได้
         return True
 
     def nudge(self, d_theta_deg: float, d_z: float) -> bool:
         """ขยับจากท่าปัจจุบันทีละนิด (ใช้ในเฟสละเอียด) — ไม่แตะ pitch"""
+        if not self._pose_ik_valid:
+            print("[Arm] ปฏิเสธ nudge: ท่าปัจจุบันสร้างซ้ำด้วย IK ไม่ได้ "
+                  "(เช่นเพิ่งสั่ง go_scan_pose) — ต้อง move_to ไปท่าที่ IK แก้ได้ก่อน")
+            return False
         r, theta_deg, z, pitch_deg = self.current()
         return self.move_to(r, theta_deg + d_theta_deg, z + d_z, pitch_deg)
 
@@ -134,6 +144,7 @@ class Arm:
 
         r0, z0 = fk(pose['J2'], pose['J3'], pose['J4'])
         self._pose = {'r': r0, 'theta_deg': pose['J1'], 'z': z0, 'pitch_deg': 0.0}
+        self._pose_ik_valid = False     # ท่าสแกนอยู่นอก LIMITS — IK สร้างซ้ำไม่ได้
 
     def retreat(self) -> None:
         """แตะแล้วถอยทันที — ถอย r เข้าหาฐาน ไม่ค้างดันของแข็ง (กฎข้อ 5)"""
