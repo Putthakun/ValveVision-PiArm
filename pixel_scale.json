@@ -1,0 +1,15 @@
+{
+  "deg_per_px_x": -0.046901,
+  "mm_per_px_y": -0.15777,
+  "measured_at_cm": 12.0,
+  "measured_at_clock": 9.0,
+  "rounds": 5,
+  "spread_pct": {
+    "x": 3.4,
+    "y": 18.5
+  },
+  "aim_x": null,
+  "aim_y": null,
+  "aim_from": "gripper_visible",
+  "note": "aim_x/aim_y ยังไม่ได้วัด — ดู Task 8 Step 4"
+}

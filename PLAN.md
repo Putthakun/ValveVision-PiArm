@@ -923,7 +923,7 @@ git commit -m "feat: เทรนโมเดลรอบที่ 1 จาก 1
 - `"gripper_visible"` — เห็นปลาย gripper ในภาพ `fine.py` จะ**ตรวจหาปลาย gripper ทุกเฟรมแล้วใช้เป็นจุดเล็ง** ค่า `aim_x/aim_y` ในไฟล์เป็นแค่ค่าสำรองเมื่อหาไม่เจอ
 - `"calibrated"` — ไม่เห็นปลาย gripper ต้องหาจุดเล็งด้วยการทดลอง (ดู Step 4 ของ task นี้) แล้ว `fine.py` ใช้ค่าคงที่จากไฟล์
 
-- [ ] **Step 1: เขียนสคริปต์**
+- [x] **Step 1: เขียนสคริปต์**
 
 ```
 วางแขนให้เห็นวาล์วที่ระยะ ~15 ซม.
@@ -935,17 +935,17 @@ arm.nudge(d_theta_deg=0, d_z=+10) → ตรวจจับ จด (u2, v2)
 ทำซ้ำ 3 รอบเอาค่าเฉลี่ย เขียนลง pixel_scale.json
 ```
 
-- [ ] **Step 2: รันบน Pi**
+- [x] **Step 2: รันบน Pi**
 
 ```bash
 ssh pi@<host> 'cd ~/ValveVision-PiArm && python tools/measure_pixel_scale.py'
 ```
 
-- [ ] **Step 3: ตรวจความสมเหตุสมผลของเครื่องหมาย**
+- [x] **Step 3: ตรวจความสมเหตุสมผลของเครื่องหมาย**
 
 หมุน J1 เพิ่ม แล้ววาล์วควรเลื่อนไปทางเดียวกันทุกครั้ง — ถ้า 3 รอบได้เครื่องหมายไม่ตรงกัน แปลว่าการตรวจจับไม่นิ่ง ต้องแก้ก่อน
 
-- [ ] **Step 4: หา `aim_x`, `aim_y` — ทำเฉพาะเมื่อ Task 4 พบว่าไม่เห็นปลาย gripper**
+- [~] **Step 4: หา `aim_x`, `aim_y` — ทำเฉพาะเมื่อ Task 4 พบว่าไม่เห็นปลาย gripper**  ← ข้าม: Task 4 ยืนยันแล้วว่าเห็น gripper (`aim_from="gripper_visible"`)
 
 ถ้าเห็นปลาย gripper ให้ตั้ง `aim_from="gripper_visible"` แล้วข้าม step นี้ไป
 
@@ -953,7 +953,7 @@ ssh pi@<host> 'cd ~/ValveVision-PiArm && python tools/measure_pixel_scale.py'
 → ตรวจจับวาล์วในเฟรมนั้น ตำแหน่ง `(u, v)` ที่ได้**คือจุดเล็ง** เพราะเราพิสูจน์แล้วว่าจากจุดนี้เดินตรงเข้าไปแล้วแตะโดน
 ทำซ้ำ 3 ครั้งเอาค่าเฉลี่ย ตั้ง `aim_from="calibrated"`
 
-- [ ] **Step 5: commit**
+- [x] **Step 5: commit**
 
 ```bash
 git add tools/measure_pixel_scale.py pixel_scale.json
