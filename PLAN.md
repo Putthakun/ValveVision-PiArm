@@ -982,7 +982,7 @@ class CoarseResult:
 def coarse_locate(cam, session, arm, *, confirm_frames: int = 3) -> CoarseResult
 ```
 
-- [ ] **Step 1: เขียน test ด้วย `ReplayCamera`**
+- [x] **Step 1: เขียน test ด้วย `ReplayCamera`**
 
 ```python
 from camera import ReplayCamera
@@ -997,9 +997,9 @@ def test_ไม่เจอวาล์วต้องคืน_ok_False(tmp_pat
     assert res.ok is False and res.reason == "ไม่เจอวาล์ว"
 ```
 
-- [ ] **Step 2: รันให้ล้มเหลว**
+- [x] **Step 2: รันให้ล้มเหลว**
 
-- [ ] **Step 3: เขียน `coarse.py`**
+- [x] **Step 3: เขียน `coarse.py`**
 
 หน้าที่: หาว่าวาล์วอยู่โซนไหน **ไม่ต้องแม่น** — พาแขนเข้าใกล้พอให้กล้องที่มือเห็นก็พอ
 1. ถ่ายจนเจอวาล์วติดกัน 3 เฟรม ถ้าไม่เจอคืน `ok=False`
@@ -1011,7 +1011,7 @@ def test_ไม่เจอวาล์วต้องคืน_ok_False(tmp_pat
 เฟสหยาบหา *มุมรอบดุมล้อ* จากตำแหน่งจุ๊บเทียบดุมในภาพ แล้วแปลงเป็น `(r, θ, z)` ด้วยเรขาคณิต
 — ดู `DESIGN.md` หัวข้อ 6.1 สำหรับสูตรที่ยืนยันแล้วว่าสร้างตาราง 5 ตำแหน่งได้ตรงเป๊ะ
 
-- [ ] **Step 4: รัน test ให้ผ่าน**
+- [x] **Step 4: รัน test ให้ผ่าน**
 
 - [ ] **Step 5: commit**
 
