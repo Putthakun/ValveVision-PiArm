@@ -5,6 +5,8 @@
 #   1. เปิดสตรีมกล้องไว้อีกหน้าต่าง:  python3 tools/preview_cameras.py
 #   2. เปิดเบราว์เซอร์ดูที่          http://<TAILSCALE_IP>:8081/wrist
 #   3. รันสคริปต์นี้แล้วกดปุ่มปรับ ดูภาพในเบราว์เซอร์ไปด้วย
+#      ท่า A (ค่าเริ่มต้น):  python3 tools/adjust_scan_pose.py
+#      ท่า B (ครึ่งบน):     python3 tools/adjust_scan_pose.py --upper
 #   4. พอใจแล้วกด p เพื่อบันทึกลง config.py
 #
 # ปุ่ม:
@@ -26,9 +28,13 @@ import tty
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from servo_controller import ServoController
-from config import SCAN_POSE
+from config import SCAN_POSE, SCAN_POSE_UPPER
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.py')
+
+UPPER = '--upper' in sys.argv
+POSE_NAME = 'SCAN_POSE_UPPER' if UPPER else 'SCAN_POSE'
+BASE_POSE = SCAN_POSE_UPPER if UPPER else SCAN_POSE
 
 
 def getch():
@@ -42,11 +48,11 @@ def getch():
 
 
 def save_to_config(j1: float, j2: float, j3: float) -> bool:
-    """เขียนค่า J1/J2/J3 ใหม่ลงบล็อก SCAN_POSE ใน config.py (ไม่แตะส่วนอื่น)"""
+    """เขียนค่า J1/J2/J3 ใหม่ลงบล็อก SCAN_POSE/SCAN_POSE_UPPER ใน config.py (ไม่แตะส่วนอื่น)"""
     src = open(CONFIG_PATH, encoding='utf-8').read()
-    start = src.find('SCAN_POSE = {')
+    start = src.find(f'{POSE_NAME} = {{')
     if start == -1:
-        print('  ✗ หา SCAN_POSE ใน config.py ไม่เจอ')
+        print(f'  ✗ หา {POSE_NAME} ใน config.py ไม่เจอ')
         return False
     end = src.find('}', start)
     block = src[start:end]
@@ -60,14 +66,14 @@ def save_to_config(j1: float, j2: float, j3: float) -> bool:
 
 
 ctrl = ServoController()
-saved_j1 = float(SCAN_POSE['J1'])
-saved_j2 = float(SCAN_POSE['J2'])
-saved_j3 = float(SCAN_POSE['J3'])
+saved_j1 = float(BASE_POSE['J1'])
+saved_j2 = float(BASE_POSE['J2'])
+saved_j3 = float(BASE_POSE['J3'])
 j1, j2, j3 = saved_j1, saved_j2, saved_j3
 step = 1.0
 
 print('=' * 64)
-print('ปรับท่าสแกน — ดูภาพสดที่ http://<TAILSCALE_IP>:8081/wrist')
+print(f'ปรับท่าสแกน {POSE_NAME} — ดูภาพสดที่ http://<TAILSCALE_IP>:8081/wrist')
 print()
 print('  a / d   J1 ลด / เพิ่ม   (น้อยลง = ล้อเลื่อนไปทางขวาในภาพ)')
 print('  w / x   J2 ลด / เพิ่ม   (น้อยลง = กล้องเงยขึ้น ล้อเลื่อนลงในภาพ)')
@@ -85,7 +91,7 @@ def show():
 
 
 def apply():
-    pose = dict(SCAN_POSE)
+    pose = dict(BASE_POSE)
     pose['J1'] = j1
     pose['J2'] = j2
     pose['J3'] = j3
@@ -124,7 +130,7 @@ while True:
     elif k == 'p':
         if save_to_config(j1, j2, j3):
             saved_j1, saved_j2, saved_j3 = j1, j2, j3
-            print(f'\n  ✓ บันทึกลง config.py แล้ว — SCAN_POSE J1={j1:.1f} J2={j2:.1f} J3={j3:.1f}')
+            print(f'\n  ✓ บันทึกลง config.py แล้ว — {POSE_NAME} J1={j1:.1f} J2={j2:.1f} J3={j3:.1f}')
             print('    (อย่าลืม git commit)')
         show()
         continue

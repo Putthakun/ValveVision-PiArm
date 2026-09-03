@@ -89,8 +89,12 @@ def _pixel_angle_to_clock(hub_xy: tuple[float, float], valve_xy: tuple[float, fl
     return clock
 
 
-def _detect_once(cam: BaseCamera, session) -> tuple[float, float] | None:
-    """ถ่าย 1 เฟรม หาทั้งกล่องจุ๊บและดุมล้อ คืนตำแหน่งจุ๊บเทียบดุมเป็นมุมนาฬิกา หรือ None"""
+def _detect_once(cam: BaseCamera, session, pose_tag: str = "") -> tuple[float, float] | None:
+    """ถ่าย 1 เฟรม หาทั้งกล่องจุ๊บและดุมล้อ คืนตำแหน่งจุ๊บเทียบดุมเป็นมุมนาฬิกา หรือ None
+
+    pose_tag : ใส่ "A"/"B" เพื่อแยกไฟล์ debug ของแต่ละท่าสแกน ไม่งั้นไฟล์จะทับกัน
+               เห็นแค่ท่าล่าสุด (debug ชั่วคราว)
+    """
     sess, input_name, output_name = session
 
     frame = cam.grab()
@@ -103,6 +107,9 @@ def _detect_once(cam: BaseCamera, session) -> tuple[float, float] | None:
     blob, scale, pad_left, pad_top = preprocess(frame)
     dets = postprocess(sess.run([output_name], {input_name: blob})[0], w, h, scale, pad_left, pad_top)
     if not dets:
+        path = f"/tmp/coarse_debug_noval_{pose_tag}.jpg"
+        cv2.imwrite(path, frame)   # ★ debug ชั่วคราว ดูว่าจุ๊บอยู่ในเฟรมไหม
+        print(f"[coarse] เฟรมนี้ไม่เจอกล่องจุ๊บ (โมเดลตรวจไม่เจอ) — เก็บภาพไว้ที่ {path}")
         return None
 
     x1, y1, x2, y2, _, _ = max(dets, key=lambda d: d[4])
@@ -110,6 +117,9 @@ def _detect_once(cam: BaseCamera, session) -> tuple[float, float] | None:
 
     hub_xy = _find_hub(frame)
     if hub_xy is None:
+        path = f"/tmp/coarse_debug_nohub_{pose_tag}.jpg"
+        cv2.imwrite(path, frame)   # ★ debug ชั่วคราว ดูว่าดุมล้อหน้าตาเป็นยังไงตอนหาไม่เจอ
+        print(f"[coarse] เจอจุ๊บที่ {valve_xy} แต่หาดุมล้อไม่เจอ — เก็บภาพไว้ที่ {path}")
         return None
 
     return _pixel_angle_to_clock(hub_xy, valve_xy)
@@ -118,11 +128,12 @@ def _detect_once(cam: BaseCamera, session) -> tuple[float, float] | None:
 def _scan_from_pose(cam: BaseCamera, session, arm: Arm, upper: bool, confirm_frames: int) -> float | None:
     """ไปท่าสแกน (A หรือ B) แล้วลองหาจุ๊บจนกว่าจะเจอติดกัน confirm_frames เฟรม"""
     arm.go_scan_pose(upper=upper)
+    pose_tag = "B" if upper else "A"
 
     streak = 0
     last_clock = None
     for _ in range(MAX_ATTEMPTS_PER_POSE):
-        clock = _detect_once(cam, session)
+        clock = _detect_once(cam, session, pose_tag)
         if clock is not None:
             streak += 1
             last_clock = clock
