@@ -137,8 +137,16 @@ def _detect_once(cam: BaseCamera, session, pose_tag: str = "") -> tuple[float, f
     return _pixel_angle_to_clock(hub_xy, valve_xy)
 
 
+CLOCK_STABLE_TOL = 0.5   # ชม. — ค่าที่นับว่า "นิ่ง" ต้องห่างจากเฟรมก่อนหน้าไม่เกินนี้
+
+
 def _scan_from_pose(cam: BaseCamera, session, arm: Arm, upper: bool, confirm_frames: int) -> float | None:
-    """ไปท่าสแกน (A หรือ B) แล้วลองหาจุ๊บจนกว่าจะเจอติดกัน confirm_frames เฟรม"""
+    """ไปท่าสแกน (A หรือ B) แล้วลองหาจุ๊บจนกว่าจะเจอ "นิ่ง" ติดกัน confirm_frames เฟรม
+
+    ★ ต้องเช็คว่าค่านิ่งด้วย ไม่ใช่แค่เจอ (ไม่ None) ติดกัน — เจอจริงจากการทดสอบ
+    (2026-09) ว่าดุมล้อที่ตรวจได้สลับไปเจอวัตถุคนละชิ้นกลางทาง (เช่น ขอบเฟรม)
+    แต่ยัง "เจอ" ครบ 3 เฟรมติดกันพอดี ระบบเลยยืนยันค่าที่ผิดไปโดยไม่รู้ตัว
+    """
     arm.go_scan_pose(upper=upper)
     pose_tag = "B" if upper else "A"
 
@@ -146,14 +154,21 @@ def _scan_from_pose(cam: BaseCamera, session, arm: Arm, upper: bool, confirm_fra
     last_clock = None
     for _ in range(MAX_ATTEMPTS_PER_POSE):
         clock = _detect_once(cam, session, pose_tag)
-        if clock is not None:
+        if clock is not None and (last_clock is None or _clock_diff(clock, last_clock) <= CLOCK_STABLE_TOL):
             streak += 1
             last_clock = clock
             if streak >= confirm_frames:
                 return last_clock
         else:
-            streak = 0
+            streak = 1 if clock is not None else 0
+            last_clock = clock
     return None
+
+
+def _clock_diff(a: float, b: float) -> float:
+    """ระยะห่างระหว่าง 2 ตำแหน่งนาฬิกา แบบวนรอบ (11.9 กับ 0.1 ห่างกันแค่ 0.2 ไม่ใช่ 11.8)"""
+    d = abs(a - b) % 12.0
+    return min(d, 12.0 - d)
 
 
 def coarse_locate(cam: BaseCamera, session, arm: Arm, *, confirm_frames: int = CONFIRM_FRAMES_DEFAULT) -> CoarseResult:

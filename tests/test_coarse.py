@@ -2,9 +2,10 @@
 import cv2
 import numpy as np
 
+import coarse
 from arm import Arm
 from camera import ReplayCamera
-from coarse import _pixel_angle_to_clock, coarse_locate
+from coarse import _pixel_angle_to_clock, _scan_from_pose, coarse_locate
 from valve_detector import load_model
 
 
@@ -37,3 +38,20 @@ def test_มุม_3_และ_9_นาฬิกาอยู่คนละฝ�
     c9 = _pixel_angle_to_clock(hub_xy=(640, 400), valve_xy=(440, 400))
     assert abs(c3 - 3.0) < 0.1
     assert abs(c9 - 9.0) < 0.1
+
+
+def test_ค่าที่เจอไม่นิ่งต้องไม่ถูกยืนยัน(monkeypatch):
+    """เจอจริงจากแขนจริง (2026-09): ดุมล้อสลับไปเจอวัตถุคนละชิ้นกลางทาง
+    (ค่ากระโดด 11.8 → 1.5 → 1.5) แต่ "เจอ" (ไม่ None) ครบ 3 เฟรมติดกันพอดี
+    ระบบเดิมเลยยืนยันค่าผิด ต้องเช็คว่าค่านิ่งด้วย ไม่ใช่แค่เจอ
+    """
+    # เจอ 11.8 หนึ่งเฟรม สลับไปเจอวัตถุผิดที่ 1.5 สองเฟรมติด (แบบเดียวกับของจริง)
+    # โค้ดเดิมจะยืนยัน 1.5 ผิดๆ ทันทีตรงนี้ (นับแค่ "เจอ" ครบ 3 ไม่สนว่าค่าตรงกันไหม)
+    # ก่อนจะกลับมานิ่งจริงที่ 11.8 อีกครั้งตอนหลัง
+    readings = iter([11.8, 1.5, 1.5, 11.8, 11.8, 11.8])
+    monkeypatch.setattr(coarse, "_detect_once", lambda cam, session, pose_tag: next(readings))
+
+    clock = _scan_from_pose(cam=None, session=None, arm=Arm(simulate=True), upper=False, confirm_frames=3)
+
+    assert clock is not None
+    assert abs(clock - 11.8) < 0.1   # ต้องได้ค่าที่นิ่งจริง ไม่ใช่ 1.5 ที่นิ่งปลอมแค่ 2 เฟรม
