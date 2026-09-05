@@ -106,8 +106,8 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         if valve_xy is None:
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
+        frame = cam.grab() if scale.get("aim_from") == "gripper_visible" or debug else None
         if scale.get("aim_from") == "gripper_visible":
-            frame = cam.grab()
             target_xy = _find_gripper_tip(frame) if frame is not None else None
             if target_xy is None:
                 return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
@@ -120,6 +120,11 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
 
         if debug:
             print(f"  รอบ {step + 1}: {last_err:.0f}px  (err_x={err_x:+.0f} err_y={err_y:+.0f})")
+            if frame is not None:
+                vis = frame.copy()
+                cv2.circle(vis, (int(valve_xy[0]), int(valve_xy[1])), 10, (0, 255, 0), 2)
+                cv2.circle(vis, (int(target_xy[0]), int(target_xy[1])), 10, (0, 0, 255), 2)
+                cv2.imwrite(f"/tmp/fine_debug_step{step + 1}.jpg", vis)
 
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
