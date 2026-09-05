@@ -52,7 +52,11 @@ def _find_hub(frame: np.ndarray) -> tuple[float, float] | None:
         if not (40 < r < 120):
             continue
         circularity = cv2.contourArea(c) / (math.pi * r * r)
-        if circularity < 0.55:
+        # ★ เกณฑ์ 0.55 เดิมเข้มไปตอนดุมล้อโดนขอบเฟรมตัด (2026-09, ตำแหน่ง 8 นาฬิกา
+        #   ท่า B) — รูกลางดุมที่ถูกต้องได้ circularity 0.51 เพราะโดนตัดขอบ
+        #   ลดเป็น 0.45 แล้วเช็คแล้วว่าตัวปลอมในเฟรมเดียวกันต่ำกว่านี้มาก (≤0.34)
+        #   จึงไม่ทำให้เลือกผิดตัว
+        if circularity < 0.45:
             continue
         if best is None or r > best[2]:
             best = (cx, cy, r)
