@@ -24,6 +24,14 @@ from geometry import valve_pose
 CONFIRM_FRAMES_DEFAULT = 3
 MAX_ATTEMPTS_PER_POSE = 10   # ลองถ่ายกี่เฟรมก่อนเปลี่ยนไปท่าสแกนอีกท่า
 
+# ★ เว้นระยะไว้ 12 ซม. ก่อนถึงจุ๊บจริง — ไม่ใช่ค่าชดเชย error (ไม่ผิดกฎข้อ 1)
+#   แต่เป็นระยะที่ดีไซน์ไว้ตั้งแต่แรกใน CONTEXT.md/DESIGN.md ให้ Task 11 เดินหน้า
+#   แบบไม่มองช่วงสุดท้าย (กล้องโฟกัสใกล้ขนาดนั้นไม่ได้แล้ว)
+#   พลาดไปตอนเขียน Task 9 ครั้งแรก — ทำให้ coarse_locate() พาแขนไปเกือบถึงจุ๊บ
+#   เกินไป เฟสละเอียด (fine.py) ที่ตามมาเจอทั้งจุ๊บหลุดเฟรม (กล้องใกล้ = มุมมอง
+#   แคบ error มุมนาฬิกาแค่นิดเดียวก็หลุดจอ) และชนขีดจำกัดการเอื้อมบ่อยขึ้น
+STANDOFF_MM = 120.0
+
 
 @dataclass
 class CoarseResult:
@@ -160,7 +168,8 @@ def coarse_locate(cam: BaseCamera, session, arm: Arm, *, confirm_frames: int = C
     if clock is None:
         return CoarseResult(ok=False, reason="ไม่เจอวาล์ว")
 
-    r, theta_deg, z = valve_pose(clock)
+    r_touch, theta_deg, z = valve_pose(clock)
+    r = max(0.0, r_touch - STANDOFF_MM)
     pitch_deg = arm.best_pitch(r, theta_deg, z)
     if pitch_deg is None:
         return CoarseResult(ok=False, reason="เอื้อมไม่ถึง")
