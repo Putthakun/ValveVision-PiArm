@@ -79,7 +79,10 @@ def _detect_valve_px(cam: BaseCamera, session) -> tuple[float, float] | None:
     frame = cam.grab()
     if frame is None:
         return None
+    return _valve_px_in_frame(frame, session)
 
+
+def _valve_px_in_frame(frame: np.ndarray, session) -> tuple[float, float] | None:
     from valve_detector import postprocess, preprocess
 
     sess, input_name, output_name = session
@@ -102,14 +105,24 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
     last_err = 0.0
 
     for step in range(max_steps):
-        valve_xy = _detect_valve_px(cam, session)
-        if valve_xy is None:
+        frame = cam.grab()
+        if frame is None:
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
-        frame = cam.grab() if scale.get("aim_from") == "gripper_visible" or debug else None
+        valve_xy = _valve_px_in_frame(frame, session)
+        if valve_xy is None:
+            if debug:
+                cv2.imwrite(f"/tmp/fine_debug_noval_{step + 1}.jpg", frame)
+                print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ — เก็บภาพไว้ที่ /tmp/fine_debug_noval_{step + 1}.jpg")
+            return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
+
         if scale.get("aim_from") == "gripper_visible":
-            target_xy = _find_gripper_tip(frame) if frame is not None else None
+            target_xy = _find_gripper_tip(frame)
             if target_xy is None:
+                if debug:
+                    cv2.imwrite(f"/tmp/fine_debug_notip_{step + 1}.jpg", frame)
+                    print(f"  รอบ {step + 1}: เจอจุ๊บแต่หาปลาย gripper ไม่เจอ — "
+                          f"เก็บภาพไว้ที่ /tmp/fine_debug_notip_{step + 1}.jpg")
                 return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
         else:
             target_xy = (scale["aim_x"], scale["aim_y"])

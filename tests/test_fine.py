@@ -41,13 +41,13 @@ def _patch_detectors(monkeypatch, valve_track, gripper_xy=(640.0, 520.0)):
     """
     it = iter(valve_track)
 
-    def fake_detect_valve_px(cam, session):
+    def fake_valve_px_in_frame(frame, session):
         return next(it)
 
     def fake_find_gripper_tip(frame):
         return gripper_xy
 
-    monkeypatch.setattr(fine, "_detect_valve_px", fake_detect_valve_px)
+    monkeypatch.setattr(fine, "_valve_px_in_frame", fake_valve_px_in_frame)
     monkeypatch.setattr(fine, "_find_gripper_tip", fake_find_gripper_tip)
 
 
