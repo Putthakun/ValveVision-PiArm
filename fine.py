@@ -96,7 +96,8 @@ def _detect_valve_px(cam: BaseCamera, session) -> tuple[float, float] | None:
 def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
                max_steps: int = MAX_STEPS_DEFAULT,
                px_thresh: float = PX_THRESH_DEFAULT,
-               gain: float = GAIN_DEFAULT) -> FineResult:
+               gain: float = GAIN_DEFAULT,
+               debug: bool = False) -> FineResult:
     """ไล่ nudge แขนทีละนิดจนจุ๊บในภาพมาอยู่ตำแหน่งเดียวกับปลาย gripper"""
     last_err = 0.0
 
@@ -117,6 +118,9 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         err_y = valve_xy[1] - target_xy[1]
         last_err = math.hypot(err_x, err_y)
 
+        if debug:
+            print(f"  รอบ {step + 1}: {last_err:.0f}px  (err_x={err_x:+.0f} err_y={err_y:+.0f})")
+
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
 
@@ -126,3 +130,43 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
             return FineResult(False, step, last_err, "แขนขยับต่อไม่ได้")
 
     return FineResult(False, max_steps, last_err, "ครบรอบสูงสุด")
+
+
+def _main():
+    import argparse
+    import json
+
+    from camera import WristCamera
+    from coarse import coarse_locate
+    from valve_detector import load_model
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--debug", action="store_true", help="พิมพ์ความคลาดเคลื่อนพิกเซลทุกรอบ")
+    args = ap.parse_args()
+
+    with open("pixel_scale.json", encoding="utf-8") as f:
+        scale = json.load(f)
+
+    arm = Arm()
+    cam = WristCamera()
+    session = load_model()
+    try:
+        print("เฟสหยาบ: หาวาล์ว...")
+        coarse = coarse_locate(cam, session, arm)
+        if not coarse.ok:
+            print(f"เฟสหยาบไม่สำเร็จ — reason={coarse.reason}")
+            return
+
+        print(f"เฟสหยาบ ok — r={coarse.r:.0f} theta={coarse.theta_deg:.0f}° "
+              f"z={coarse.z:.0f} pitch={coarse.pitch_deg:+.0f}°")
+        print("เฟสละเอียด: ไล่ตำแหน่ง...")
+        res = fine_align(cam, session, arm, scale, debug=args.debug)
+        print(f"ผล: converged={res.converged} steps={res.steps} "
+              f"final_px_err={res.final_px_err:.1f} reason={res.reason}")
+    finally:
+        cam.close()
+        arm.go_scan_pose()
+
+
+if __name__ == "__main__":
+    _main()
