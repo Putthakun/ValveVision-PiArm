@@ -12,6 +12,7 @@
 #   หมุนล้อไปตำแหน่งที่ต้องการแล้วรัน
 #   python3 tools/manual_assist_align.py
 
+import json
 import os
 import sys
 
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from arm import Arm
 from camera import WristCamera
 from coarse import _scan_from_pose, CONFIRM_FRAMES_DEFAULT
+from fine import fine_align
 from geometry import valve_pose
 from valve_detector import load_model
 
@@ -67,12 +69,27 @@ def main():
             return
 
         shortfall = r_touch - r
-        print(f"\nไปถึง r={r:.0f}mm (theta={theta_deg:.0f}° z={z:.0f}mm pitch={pitch:+.0f}°) แล้ว")
+        print(f"\nไปถึง r={r:.0f}mm (theta={theta_deg:.0f}° z={z:.0f}mm pitch={pitch:+.0f}°) — "
+              f"นี่แค่คำนวณจากเรขาคณิต ยังไม่ยืนยันด้วยภาพ กำลังไล่ตำแหน่งซ้าย-ขวา/บน-ล่างด้วยกล้องต่อ...")
+
+        with open("pixel_scale.json", encoding="utf-8") as f:
+            scale = json.load(f)
+        fine_res = fine_align(cam, session, arm, scale, debug=True)
+
+        print()
+        if not fine_res.converged:
+            print(f"เฟสละเอียดไม่ลู่เข้า (reason={fine_res.reason}, "
+                  f"เหลือ error {fine_res.final_px_err:.0f}px) — ยังไม่ยืนยันว่าซ้าย-ขวา/บน-ล่างตรงจริง "
+                  f"อย่าเพิ่งดันฐานเข้าไป ต้องแก้ตรงนี้ก่อน")
+            return
+
+        print("ซ้าย-ขวา/บน-ล่างตรงกับปลาย gripper แล้ว (ยืนยันจากกล้องจริง)")
         if shortfall < 1.0:
-            print("เอื้อมถึงจุ๊บพอดี ไม่ต้องช่วยดัน!")
+            print("ระยะลึกก็เอื้อมถึงพอดี ไม่ต้องช่วยดัน!")
         else:
-            print(f"ขาดอีก {shortfall:.0f}mm ถึงจะถึงจุ๊บ — ช่วยดันฐาน/ล้อเข้าหากันอีก {shortfall:.0f}mm "
-                  f"ตามแนวที่แขนชี้อยู่ตอนนี้ แล้วปลาย gripper ควรไปตรงจุ๊บพอดี")
+            print(f"เหลือแค่ระยะลึกที่ขาดอีก {shortfall:.0f}mm — ช่วยดันฐาน/ล้อเข้าหากันตามแนวที่แขนชี้อยู่ "
+                  f"ตอนนี้อีก {shortfall:.0f}mm แล้วปลาย gripper จะไปตรงจุ๊บพอดี "
+                  f"(อย่าดันเบี้ยวไปทางอื่น ไม่งั้นซ้าย-ขวา/บน-ล่างที่ตรงไว้แล้วจะเพี้ยน)")
     finally:
         cam.close()
 
