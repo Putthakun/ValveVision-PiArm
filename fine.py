@@ -39,6 +39,12 @@ SETTLE_SEC = 1.2
 #   (โมเดล/heuristic ไม่ได้แม่น 100%) เหมือน coarse.py ที่ต้องลองหลายเฟรม
 RETRIES_PER_STEP = 3
 
+# ★ ค่าสำรองตำแหน่งปลาย gripper — ใช้เฉพาะตอนหาสดไม่เจอจริงๆ (เช่นเงายาง
+#   ทับติดกับก้ามคีบเป็นก้อนเดียว แยกไม่ออก) เป็นค่าเฉลี่ยจากภาพที่เคยตรวจจับ
+#   สำเร็จจริงหลายสิบภาพตอน Task 9 (ส่วนใหญ่อยู่ราว x=393-570, y=504-537)
+#   ไม่แม่นเท่าตรวจจับสด แต่ดีกว่ายกเลิกทั้งรอบเฉยๆ
+FALLBACK_GRIPPER_TIP_XY = (480.0, 520.0)
+
 
 @dataclass
 class FineResult:
@@ -144,11 +150,14 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
         if target_xy is None:
+            # ★ หาปลาย gripper สดไม่เจอ (เช่นเงายางทับติดกันแยกไม่ออก) —
+            #   ใช้ค่าสำรองแทนที่จะยกเลิกทั้งรอบ ไม่แม่นเท่าตรวจจับสดแต่ยังไปต่อได้
+            target_xy = FALLBACK_GRIPPER_TIP_XY
             if debug and frame is not None:
                 cv2.imwrite(f"/tmp/fine_debug_notip_{step + 1}.jpg", frame)
                 print(f"  รอบ {step + 1}: เจอจุ๊บแต่หาปลาย gripper ไม่เจอ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
+                      f"ใช้ค่าสำรอง {FALLBACK_GRIPPER_TIP_XY} แทน "
                       f"เก็บภาพไว้ที่ /tmp/fine_debug_notip_{step + 1}.jpg")
-            return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
         err_x = valve_xy[0] - target_xy[0]
         err_y = valve_xy[1] - target_xy[1]

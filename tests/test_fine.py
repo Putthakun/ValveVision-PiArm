@@ -88,6 +88,23 @@ def test_ครบรอบสูงสุดต้องหยุด_ไม่�
     assert res.steps == 5
 
 
+def test_หาปลาย_gripper_สดไม่เจอต้องใช้ค่าสำรองแทน_ไม่ยกเลิกทั้งรอบ(monkeypatch):
+    """เจอจริง (2026-09): เงายางทับติดกับก้ามคีบเป็นก้อนเดียว แยกรูปทรงไม่ออก
+    ห้ามยกเลิกทั้งเฟสแค่เพราะเฟรมเดียวแยกไม่ออก ให้ใช้ค่าสำรองไปก่อน
+    """
+    target = fine.FALLBACK_GRIPPER_TIP_XY
+    # จุ๊บเจอนิ่งทุกเฟรม (ใกล้เป้าสำรองพอที่จะเข้าเป้าได้เลย) — ปัญหาอยู่ที่หา
+    # ปลาย gripper ไม่เจอเท่านั้น ให้ครบ RETRIES_PER_STEP ไว้กันหมดลิสต์ระหว่างลองซ้ำ
+    it = iter([(target[0] + 8, target[1])] * fine.RETRIES_PER_STEP)
+    monkeypatch.setattr(fine, "_valve_px_in_frame", lambda frame, session: next(it, None))
+    monkeypatch.setattr(fine, "_find_gripper_tip", lambda frame: None)   # หาสดไม่เจอเสมอ
+
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
+
+    assert res.converged is True
+    assert res.reason == "เข้าเป้า"
+
+
 def test_arm_ขยับต่อไม่ได้ต้องหยุด(monkeypatch):
     target = (640.0, 520.0)
     _patch_detectors(monkeypatch, [(target[0] + 80, target[1])] * 3, gripper_xy=target)
