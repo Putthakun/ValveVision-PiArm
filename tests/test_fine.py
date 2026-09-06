@@ -42,7 +42,7 @@ def _patch_detectors(monkeypatch, valve_track, gripper_xy=(640.0, 520.0)):
     it = iter(valve_track)
 
     def fake_valve_px_in_frame(frame, session):
-        return next(it)
+        return next(it, None)   # หมดลิสต์แล้วให้ถือว่าไม่เจอ แทนที่จะ StopIteration
 
     def fake_find_gripper_tip(frame):
         return gripper_xy
@@ -58,7 +58,7 @@ def test_ลู่เข้าเป้าแล้วต้องหยุด(m
              (target[0] + 20, target[1]), (target[0] + 8, target[1])]
     _patch_detectors(monkeypatch, track, gripper_xy=target)
 
-    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0)
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
 
     assert res.converged is True
     assert res.reason == "เข้าเป้า"
@@ -68,7 +68,7 @@ def test_ลู่เข้าเป้าแล้วต้องหยุด(m
 def test_มองไม่เห็นวาล์วต้องหยุดทันที(monkeypatch):
     _patch_detectors(monkeypatch, [None])
 
-    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0)
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
 
     assert res.converged is False
     assert res.reason == "มองไม่เห็นวาล์ว"
@@ -81,7 +81,7 @@ def test_ครบรอบสูงสุดต้องหยุด_ไม่�
     track = [(target[0] + 80, target[1])] * 20   # เผื่อไว้เกิน max_steps เยอะๆ
     _patch_detectors(monkeypatch, track, gripper_xy=target)
 
-    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=5, px_thresh=12.0)
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=5, px_thresh=12.0, settle_sec=0.0)
 
     assert res.converged is False
     assert res.reason == "ครบรอบสูงสุด"
@@ -94,7 +94,7 @@ def test_arm_ขยับต่อไม่ได้ต้องหยุด(mon
 
     arm = Arm(simulate=True)   # ยังไม่ได้ move_to() ไปท่าที่ IK แก้ได้ — nudge() ต้องปฏิเสธ
 
-    res = fine_align(FakeCam(), None, arm, SCALE, max_steps=8, px_thresh=12.0)
+    res = fine_align(FakeCam(), None, arm, SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
 
     assert res.converged is False
     assert res.reason == "แขนขยับต่อไม่ได้"

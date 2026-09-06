@@ -17,6 +17,7 @@
 #   ยืนยันแล้วว่าโปรเจ็คนี้เห็น จึงไม่ใช้ทางสำรองนี้ในทางปฏิบัติ)
 
 import math
+import time
 from dataclasses import dataclass
 
 import cv2
@@ -28,6 +29,15 @@ from camera import BaseCamera
 MAX_STEPS_DEFAULT = 8
 PX_THRESH_DEFAULT = 12.0
 GAIN_DEFAULT = 0.5
+
+# ★ ต้องรอให้แขนนิ่งก่อนถ่าย — เจอจริงจากการทดสอบ (2026-09) ว่าเฟรมแรกหลัง
+#   coarse_locate() ขยับเสร็จยังสั่นอยู่ ทำให้หาปลาย gripper ไม่เจอทั้งที่จริงๆ
+#   เห็นอยู่ แค่เบลอ — ใช้ค่าเดียวกับ SETTLE_SEC ใน measure_pixel_scale.py
+SETTLE_SEC = 1.2
+
+# ★ ลองซ้ำกี่เฟรมก่อนจะสรุปว่า "มองไม่เห็นจริง" — ตรวจจับพลาดเป็นครั้งคราวได้
+#   (โมเดล/heuristic ไม่ได้แม่น 100%) เหมือน coarse.py ที่ต้องลองหลายเฟรม
+RETRIES_PER_STEP = 3
 
 
 @dataclass
@@ -100,32 +110,45 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
                max_steps: int = MAX_STEPS_DEFAULT,
                px_thresh: float = PX_THRESH_DEFAULT,
                gain: float = GAIN_DEFAULT,
-               debug: bool = False) -> FineResult:
+               debug: bool = False,
+               settle_sec: float = SETTLE_SEC) -> FineResult:
     """ไล่ nudge แขนทีละนิดจนจุ๊บในภาพมาอยู่ตำแหน่งเดียวกับปลาย gripper"""
     last_err = 0.0
 
     for step in range(max_steps):
-        frame = cam.grab()
-        if frame is None:
-            return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
+        time.sleep(settle_sec)   # รอแขนนิ่งก่อนถ่าย (เพิ่งขยับมาจาก coarse หรือ nudge รอบก่อน)
 
-        valve_xy = _valve_px_in_frame(frame, session)
+        valve_xy = target_xy = frame = None
+        for attempt in range(RETRIES_PER_STEP):
+            frame = cam.grab()
+            if frame is None:
+                continue
+
+            valve_xy = _valve_px_in_frame(frame, session)
+            if valve_xy is None:
+                continue
+
+            if scale.get("aim_from") == "gripper_visible":
+                target_xy = _find_gripper_tip(frame)
+            else:
+                target_xy = (scale["aim_x"], scale["aim_y"])
+
+            if target_xy is not None:
+                break   # เจอทั้งคู่แล้ว ไม่ต้องลองซ้ำต่อ
+
         if valve_xy is None:
-            if debug:
+            if debug and frame is not None:
                 cv2.imwrite(f"/tmp/fine_debug_noval_{step + 1}.jpg", frame)
-                print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ — เก็บภาพไว้ที่ /tmp/fine_debug_noval_{step + 1}.jpg")
+                print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
+                      f"เก็บภาพไว้ที่ /tmp/fine_debug_noval_{step + 1}.jpg")
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
-        if scale.get("aim_from") == "gripper_visible":
-            target_xy = _find_gripper_tip(frame)
-            if target_xy is None:
-                if debug:
-                    cv2.imwrite(f"/tmp/fine_debug_notip_{step + 1}.jpg", frame)
-                    print(f"  รอบ {step + 1}: เจอจุ๊บแต่หาปลาย gripper ไม่เจอ — "
-                          f"เก็บภาพไว้ที่ /tmp/fine_debug_notip_{step + 1}.jpg")
-                return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
-        else:
-            target_xy = (scale["aim_x"], scale["aim_y"])
+        if target_xy is None:
+            if debug and frame is not None:
+                cv2.imwrite(f"/tmp/fine_debug_notip_{step + 1}.jpg", frame)
+                print(f"  รอบ {step + 1}: เจอจุ๊บแต่หาปลาย gripper ไม่เจอ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
+                      f"เก็บภาพไว้ที่ /tmp/fine_debug_notip_{step + 1}.jpg")
+            return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 
         err_x = valve_xy[0] - target_xy[0]
         err_y = valve_xy[1] - target_xy[1]
