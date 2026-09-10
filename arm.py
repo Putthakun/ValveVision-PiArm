@@ -94,23 +94,30 @@ class Arm:
         return self.move_to(r, theta_deg + d_theta_deg, z + d_z, pitch_deg)
 
     # ─── เลือก pitch ────────────────────────────────────────────────────
-    def best_pitch(self, r: float, theta_deg: float, z: float) -> float | None:
-        """วน pitch หาค่าที่ทำให้ joint ที่คับที่สุดยังเหลือระยะขยับมากที่สุด คืน None ถ้าไม่มี pitch ไหนทำได้"""
+    def reachable_pitches(self, r: float, theta_deg: float, z: float) -> list[float]:
+        """คืน pitch ทุกตัวที่ solve_ik ทำได้จริงที่ (r, theta_deg, z) เรียงจาก margin มากไปน้อย
+
+        ใช้ตอนอยากได้ "ตัวเลือกสำรอง" ไม่ใช่แค่ตัวที่ดีที่สุดตัวเดียว (เช่น
+        โหมดช่วยแมนวลที่ต้องลองหลาย pitch จนกว่ากล้องจะเห็นวาล์วจริง)
+        """
         if r > R_MAX_COMMAND:
-            return None
+            return []
 
         x, y = _polar_to_xy(r, theta_deg)
-        best_margin = None
-        best_p = None
+        options = []
         for p in range(PITCH_SCAN_MIN_DEG, PITCH_SCAN_MAX_DEG + 1, PITCH_SCAN_STEP_DEG):
             angles = solve_ik(x, y, z, float(p))
             if angles is None:
                 continue
-            margin = _margin_to_limits(angles)
-            if best_margin is None or margin > best_margin:
-                best_margin, best_p = margin, float(p)
+            options.append((_margin_to_limits(angles), float(p)))
 
-        return best_p
+        options.sort(key=lambda t: -t[0])
+        return [p for _, p in options]
+
+    def best_pitch(self, r: float, theta_deg: float, z: float) -> float | None:
+        """pitch ที่ทำให้ joint ที่คับที่สุดยังเหลือระยะขยับมากที่สุด คืน None ถ้าไม่มี pitch ไหนทำได้"""
+        options = self.reachable_pitches(r, theta_deg, z)
+        return options[0] if options else None
 
     # ─── สถานะ ──────────────────────────────────────────────────────────
     def current(self) -> tuple[float, float, float, float]:
