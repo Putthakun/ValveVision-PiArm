@@ -18,7 +18,16 @@
 #
 #   --dist 150     ระยะกล้องถึงจุ๊บที่จะไปวัด (มม.)
 #   --rounds 3     จำนวนรอบ
+#   --pitch 45     บังคับวัดที่ pitch นี้ (ไม่ใส่ = เลือกอัตโนมัติ)
 #   --dry-run      คำนวณท่าอย่างเดียว ไม่ขยับแขน
+#
+# ★ วัดหลาย pitch (2026-09): ค่าที่วัดได้ใช้ได้เฉพาะ pitch ที่วัดตอนนั้นเท่านั้น
+#   (มุมกล้องเปลี่ยนไปตามความเอียงของมือ) แต่ arm.best_pitch() ที่ coarse.py
+#   ใช้เลือก pitch ไม่เท่ากันในแต่ละตำแหน่งนาฬิกา (0° ที่ 9 โมง, 45° ที่ 7 โมง,
+#   60° ที่ 3 โมง ฯลฯ) ต้องวัดคาลิเบรตไว้หลาย pitch ครอบคลุมแล้วให้ fine.py
+#   เลือกอันที่ใกล้ pitch ปัจจุบันสุด — รันซ้ำหลายครั้งด้วย --pitch คนละค่า
+#   (เช่น 0, 20, 45, 60) ผลจะรวมเก็บใน pixel_scale.json ที่ไฟล์เดียว
+#   (merge เข้าโครงสร้างเดิม ไม่ทับของ pitch อื่น)
 
 import argparse
 import json
@@ -81,15 +90,20 @@ def detect_valve(cam, sess, inp, out):
     return ((x1 + x2) / 2.0, (y1 + y2) / 2.0, conf), img
 
 
-def start_pose(clock: float, dist: float):
+def start_pose(clock: float, dist: float, force_pitch: float | None = None):
     """ท่าที่กล้องเล็งไปที่จุ๊บ ที่ระยะ dist — วิธีเดียวกับ collect_dataset.py
 
     วางปลายแขนบนแนวแกน gripper ที่ลากผ่านจุ๊บ กล้องซึ่งอยู่หลังบนแกนเดียวกัน
     จึงเล็งตรงไปที่จุ๊บ
+
+    force_pitch : ระบุ pitch ตายตัว (สำหรับวัด pixel_scale ที่ pitch นั้นๆ
+                  โดยเฉพาะ — ดูหัวข้อ "วัดหลาย pitch" ด้านบน) ไม่ระบุ = เลือก
+                  เอง (ตัวแรกในลิสต์ที่ทำได้ ใช้ตอนหาท่าเริ่มต้นทั่วไป)
     """
     r_v, th_v, z_v = valve_pose(clock)
     s = dist - CAM_BACK_MM
-    for pitch in (0, 10, -10, 20, -20, 30, 40, 50):
+    pitches = (float(force_pitch),) if force_pitch is not None else (0, 10, -10, 20, -20, 30, 40, 50)
+    for pitch in pitches:
         b = math.radians(pitch)
         r = r_v - s * math.cos(b)
         z = z_v + s * math.sin(b)
@@ -105,12 +119,14 @@ def main():
     ap.add_argument('--clock', type=float, required=True, help='ตำแหน่งนาฬิกาของจุ๊บตอนนี้')
     ap.add_argument('--dist', type=float, default=150.0, help='ระยะกล้องถึงจุ๊บ (มม.)')
     ap.add_argument('--rounds', type=int, default=3)
+    ap.add_argument('--pitch', type=float, default=None, help='บังคับวัดที่ pitch นี้ (ไม่ใส่ = เลือกอัตโนมัติ)')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
 
-    pose = start_pose(args.clock, args.dist)
+    pose = start_pose(args.clock, args.dist, force_pitch=args.pitch)
     if pose is None:
-        print(f'✗ ที่ {args.clock:g} นาฬิกา ระยะ {args.dist:.0f} มม. แขนเอื้อมไม่ถึง — ลอง --dist อื่น')
+        want = f'pitch={args.pitch:+.0f}° ' if args.pitch is not None else ''
+        print(f'✗ ที่ {args.clock:g} นาฬิกา ระยะ {args.dist:.0f} มม. {want}แขนเอื้อมไม่ถึง — ลอง --dist หรือ --pitch อื่น')
         sys.exit(1)
     r0, th0, z0, pitch = pose
 
@@ -216,11 +232,12 @@ def main():
         print('  ลองวัดซ้ำที่ระยะอื่น หรือเพิ่ม --rounds')
         sys.exit(1)
 
-    data = {
+    entry = {
         'deg_per_px_x': round(ax, 6),
         'mm_per_px_y': round(ay, 5),
         'measured_at_cm': round(args.dist / 10.0, 1),
         'measured_at_clock': args.clock,
+        'measured_at_pitch': pitch,
         'rounds': len(results),
         'spread_pct': {'x': round(spread_x, 1), 'y': round(spread_y, 1)},
         # เห็นปลาย gripper ในเฟรม (ยืนยันแล้วใน Task 4) และมันติดแน่นกับกล้อง
@@ -228,11 +245,21 @@ def main():
         'aim_x': None,
         'aim_y': None,
         'aim_from': 'gripper_visible',
-        'note': 'aim_x/aim_y ยังไม่ได้วัด — ดู Task 8 Step 4',
     }
+
+    # ★ merge เข้าไฟล์เดิม (ไม่ทับค่าที่วัดไว้ที่ pitch อื่น) — วัดหลาย pitch
+    #   สะสมในไฟล์เดียว ดู fine.py::_load_scale_for_pitch() ตอนเลือกใช้
+    existing = {}
+    if os.path.exists(OUT_JSON):
+        with open(OUT_JSON, encoding='utf-8') as f:
+            existing = json.load(f)
+    entries = existing.get('entries', {})
+    entries[f'{pitch:g}'] = entry
+    data = {'entries': entries}
+
     with open(OUT_JSON, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f'\nเขียน {OUT_JSON} แล้ว')
+    print(f'\nเขียน {OUT_JSON} แล้ว (pitch={pitch:+.0f}°, รวม {len(entries)} pitch ในไฟล์)')
 
 
 if __name__ == '__main__':

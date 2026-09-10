@@ -12,7 +12,6 @@
 #   หมุนล้อไปตำแหน่งที่ต้องการแล้วรัน
 #   python3 tools/manual_assist_align.py
 
-import json
 import os
 import sys
 
@@ -21,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from arm import Arm
 from camera import WristCamera
 from coarse import _scan_from_pose, CONFIRM_FRAMES_DEFAULT
-from fine import fine_align
+from fine import _load_scale_for_pitch, fine_align
 from geometry import valve_pose
 from valve_detector import load_model
 
@@ -72,8 +71,7 @@ def main():
         print(f"\nไปถึง r={r:.0f}mm (theta={theta_deg:.0f}° z={z:.0f}mm pitch={pitch:+.0f}°) — "
               f"นี่แค่คำนวณจากเรขาคณิต ยังไม่ยืนยันด้วยภาพ กำลังไล่ตำแหน่งซ้าย-ขวา/บน-ล่างด้วยกล้องต่อ...")
 
-        with open("pixel_scale.json", encoding="utf-8") as f:
-            scale = json.load(f)
+        scale = _load_scale_for_pitch(pitch)
         # ★ แก้แค่ซ้าย-ขวา (theta) ปล่อยขึ้น-ลง/ความลึกให้คนดันเอง — เพราะแก้ครบ
         #   ทั้ง 2 แกนพร้อมกันมักไปชนขีดจำกัดจากแกนขึ้น-ลงก่อน ทั้งที่ซ้าย-ขวา
         #   อย่างเดียวปลอดภัยกว่ามาก (ไม่กินระยะเอื้อมเพิ่ม)

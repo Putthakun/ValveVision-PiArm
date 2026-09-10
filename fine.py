@@ -192,9 +192,39 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
     return FineResult(False, max_steps, last_err, "ครบรอบสูงสุด")
 
 
+def _load_scale_for_pitch(pitch_deg: float, path: str = "pixel_scale.json") -> dict:
+    """โหลด pixel_scale.json แล้วเลือก entry ที่วัดไว้ที่ pitch ใกล้เคียงที่สุด
+
+    ★ ค่าที่วัดไว้ (deg_per_px_x/mm_per_px_y) ใช้ได้เฉพาะ pitch ที่วัดตอนนั้น
+    เท่านั้น (มุมกล้องเปลี่ยนตามความเอียงของมือ) — เจอจริงจากการทดสอบ (2026-09)
+    ว่าเอาค่าที่วัดตอน pitch=0 ไปใช้ตอน pitch=45 แล้วเฟสละเอียดวิ่งผิดทิศ
+    ไฟล์จึงเก็บหลาย pitch พร้อมกัน (ดู tools/measure_pixel_scale.py) เลือกอัน
+    ใกล้สุดตอนใช้งานจริง
+    """
+    import json
+
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    entries = data.get("entries")
+    if not entries:
+        raise ValueError(
+            f"{path} ยังเป็นฟอร์แมตเก่า (pitch เดียว) — รัน "
+            f"tools/measure_pixel_scale.py ใหม่ (ใส่ --pitch ให้ตรงกับที่ "
+            f"coarse_locate() เลือกจริง) ก่อนใช้ fine.py"
+        )
+
+    best_key = min(entries, key=lambda k: abs(float(k) - pitch_deg))
+    best = entries[best_key]
+    if abs(float(best_key) - pitch_deg) > 15.0:
+        print(f"[fine] ⚠ ไม่มี pixel_scale ที่วัดไว้ใกล้ pitch={pitch_deg:+.0f}° เลย "
+              f"(ใกล้สุดคือ {best_key}°, ห่าง {abs(float(best_key)-pitch_deg):.0f}°) "
+              f"ผลอาจไม่แม่น — ควรวัดเพิ่มด้วย tools/measure_pixel_scale.py --pitch {pitch_deg:.0f}")
+    return best
+
+
 def _main():
     import argparse
-    import json
 
     from camera import WristCamera
     from coarse import coarse_locate
@@ -203,9 +233,6 @@ def _main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--debug", action="store_true", help="พิมพ์ความคลาดเคลื่อนพิกเซลทุกรอบ")
     args = ap.parse_args()
-
-    with open("pixel_scale.json", encoding="utf-8") as f:
-        scale = json.load(f)
 
     arm = Arm()
     cam = WristCamera()
@@ -219,6 +246,8 @@ def _main():
 
         print(f"เฟสหยาบ ok — r={coarse.r:.0f} theta={coarse.theta_deg:.0f}° "
               f"z={coarse.z:.0f} pitch={coarse.pitch_deg:+.0f}°")
+        scale = _load_scale_for_pitch(coarse.pitch_deg)
+        print(f"ใช้ pixel_scale ที่วัดไว้ที่ pitch={scale['measured_at_pitch']:+.0f}°")
         print("เฟสละเอียด: ไล่ตำแหน่ง...")
         res = fine_align(cam, session, arm, scale, debug=args.debug)
         print(f"ผล: converged={res.converged} steps={res.steps} "
