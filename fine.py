@@ -117,8 +117,16 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
                px_thresh: float = PX_THRESH_DEFAULT,
                gain: float = GAIN_DEFAULT,
                debug: bool = False,
-               settle_sec: float = SETTLE_SEC) -> FineResult:
-    """ไล่ nudge แขนทีละนิดจนจุ๊บในภาพมาอยู่ตำแหน่งเดียวกับปลาย gripper"""
+               settle_sec: float = SETTLE_SEC,
+               correct_x: bool = True,
+               correct_y: bool = True) -> FineResult:
+    """ไล่ nudge แขนทีละนิดจนจุ๊บในภาพมาอยู่ตำแหน่งเดียวกับปลาย gripper
+
+    correct_x/correct_y : ปิดแกนไหนได้ถ้าไม่อยากแก้ (เช่นโหมดช่วยแมนวลที่คน
+    จะดันความลึก/แนวตั้งเองอยู่แล้ว อยากให้ระบบแก้แค่ซ้าย-ขวาที่ปลอดภัยกว่า
+    ไม่ต้องเสี่ยงชนขีดจำกัดจากการแก้แกนที่ไม่ได้ขอ) — ปิดแกนไหน แกนนั้นไม่นับ
+    ตอนเช็คว่าเข้าเป้าด้วย
+    """
     last_err = 0.0
 
     for step in range(max_steps):
@@ -161,7 +169,9 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
 
         err_x = valve_xy[0] - target_xy[0]
         err_y = valve_xy[1] - target_xy[1]
-        last_err = math.hypot(err_x, err_y)
+        # ★ ปิดแกนไหน ไม่นับ error ของแกนนั้นเลย ทั้งตอนเช็คเข้าเป้าและตอนคำนวณ nudge
+        check_x, check_y = (err_x if correct_x else 0.0), (err_y if correct_y else 0.0)
+        last_err = math.hypot(check_x, check_y)
 
         if debug:
             print(f"  รอบ {step + 1}: {last_err:.0f}px  (err_x={err_x:+.0f} err_y={err_y:+.0f})")
@@ -174,8 +184,8 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
 
-        d_theta = err_x * scale["deg_per_px_x"] * gain
-        d_z = err_y * scale["mm_per_px_y"] * gain
+        d_theta = check_x * scale["deg_per_px_x"] * gain
+        d_z = check_y * scale["mm_per_px_y"] * gain
         if not arm.nudge(d_theta, d_z):
             return FineResult(False, step, last_err, "แขนขยับต่อไม่ได้")
 

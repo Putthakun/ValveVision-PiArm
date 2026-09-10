@@ -105,6 +105,20 @@ def test_หาปลาย_gripper_สดไม่เจอต้องใช�
     assert res.reason == "เข้าเป้า"
 
 
+def test_correct_y_False_ไม่แก้แกน_y_และไม่นับตอนเช็คเข้าเป้า(monkeypatch):
+    """ใช้ตอนช่วยแมนวล — err_y ใหญ่แค่ไหนก็ไม่สน ขอแค่ err_x เข้าเป้า"""
+    target = (640.0, 520.0)
+    # err_y คงเดิมทุกรอบ (500px ค้างตลอด ถ้านับจะไม่มีวันเข้าเป้า) err_x ลู่เข้าปกติ
+    track = [(target[0] + 80, target[1] + 500), (target[0] + 8, target[1] + 500)]
+    _patch_detectors(monkeypatch, track, gripper_xy=target)
+
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0,
+                      settle_sec=0.0, correct_x=True, correct_y=False)
+
+    assert res.converged is True
+    assert res.reason == "เข้าเป้า"
+
+
 def test_arm_ขยับต่อไม่ได้ต้องหยุด(monkeypatch):
     target = (640.0, 520.0)
     _patch_detectors(monkeypatch, [(target[0] + 80, target[1])] * 3, gripper_xy=target)

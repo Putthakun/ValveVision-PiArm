@@ -74,16 +74,19 @@ def main():
 
         with open("pixel_scale.json", encoding="utf-8") as f:
             scale = json.load(f)
-        fine_res = fine_align(cam, session, arm, scale, debug=True)
+        # ★ แก้แค่ซ้าย-ขวา (theta) ปล่อยขึ้น-ลง/ความลึกให้คนดันเอง — เพราะแก้ครบ
+        #   ทั้ง 2 แกนพร้อมกันมักไปชนขีดจำกัดจากแกนขึ้น-ลงก่อน ทั้งที่ซ้าย-ขวา
+        #   อย่างเดียวปลอดภัยกว่ามาก (ไม่กินระยะเอื้อมเพิ่ม)
+        fine_res = fine_align(cam, session, arm, scale, debug=True, correct_x=True, correct_y=False)
 
         print()
         if not fine_res.converged:
-            print(f"เฟสละเอียดไม่ลู่เข้า (reason={fine_res.reason}, "
-                  f"เหลือ error {fine_res.final_px_err:.0f}px) — ยังไม่ยืนยันว่าซ้าย-ขวา/บน-ล่างตรงจริง "
+            print(f"แก้ซ้าย-ขวาไม่ลู่เข้า (reason={fine_res.reason}, "
+                  f"เหลือ error {fine_res.final_px_err:.0f}px) — ยังไม่ยืนยันว่าซ้าย-ขวาตรงจริง "
                   f"อย่าเพิ่งดันฐานเข้าไป ต้องแก้ตรงนี้ก่อน")
             return
 
-        print("ซ้าย-ขวา/บน-ล่างตรงกับปลาย gripper แล้ว (ยืนยันจากกล้องจริง)")
+        print("ซ้าย-ขวาตรงกับปลาย gripper แล้ว (ยืนยันจากกล้องจริง) — ขึ้น-ลง/ความลึกที่เหลือ ใช้สายตาช่วยดันเอง")
         if shortfall < 1.0:
             print("ระยะลึกก็เอื้อมถึงพอดี ไม่ต้องช่วยดัน!")
         else:
