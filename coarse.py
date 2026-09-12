@@ -192,11 +192,60 @@ def coarse_locate(cam: BaseCamera, session, arm: Arm, *, confirm_frames: int = C
 
     r_touch, theta_deg, z = valve_pose(clock)
     r = max(0.0, r_touch - STANDOFF_MM)
-    pitch_deg = arm.best_pitch(r, theta_deg, z)
-    if pitch_deg is None:
+    pitches = arm.reachable_pitches(r, theta_deg, z)
+    if not pitches:
         return CoarseResult(ok=False, reason="เอื้อมไม่ถึง")
 
-    if not arm.move_to(r, theta_deg, z, pitch_deg):
-        return CoarseResult(ok=False, reason="เอื้อมไม่ถึง")
+    pitch_deg = _pick_pitch_by_view(cam, session, arm, r, theta_deg, z, pitches)
+    if pitch_deg is None:
+        return CoarseResult(ok=False, reason="ไม่เจอวาล์ว")
 
     return CoarseResult(ok=True, r=r, theta_deg=theta_deg, z=z, pitch_deg=pitch_deg, reason="ok")
+
+
+PITCH_VIEW_SETTLE_SEC = 1.2   # รอแขนนิ่งก่อนถ่ายตอนลองแต่ละ pitch (ค่าเดียวกับ fine.py)
+
+
+def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
+                        r: float, theta_deg: float, z: float, pitches: list[float]) -> float | None:
+    """ลองทุก pitch ที่เอื้อมถึง เลือกตัวที่จุ๊บอยู่ใกล้ปลาย gripper ในภาพที่สุด
+
+    ★ ทำไมไม่ใช้แค่ best_pitch() (margin ข้อต่อมากสุด): เจอจริง (2026-09-12)
+      ที่ 5-7 นาฬิกา pitch ที่ margin ดีสุด (+50) ชันจนกล้องมองพื้น จุ๊บอยู่
+      ริมบนสุดของเฟรม เฟสละเอียดขยับนิดเดียวก็หลุดเฟรม — หน้าที่ของเฟสหยาบ
+      คือส่งต่อให้เฟสละเอียดใน "สภาพที่ดีที่สุด" จึงต้องเลือกจากภาพจริง
+      ไม่ใช่จากคณิตศาสตร์ข้อต่ออย่างเดียว margin เป็นแค่ลำดับที่ลอง
+    ★ ยังไม่มีสูตร pixel→mm ตรงนี้ (กฎข้อ 3) — ใช้ระยะพิกเซลแค่เปรียบเทียบ
+      ว่า pitch ไหนดีกว่ากัน ไม่ได้แปลงเป็นระยะจริง
+
+    คืน pitch ที่เลือก (และแขนอยู่ที่ pitch นั้นแล้ว) หรือ None ถ้าไม่มี pitch ไหน
+    เห็นจุ๊บเลย
+    """
+    import time
+
+    from fine import FALLBACK_GRIPPER_TIP_XY, _find_gripper_tip, _valve_px_in_frame
+
+    best_pitch, best_err = None, None
+    for pitch in pitches:
+        if not arm.move_to(r, theta_deg, z, pitch):
+            continue
+        time.sleep(PITCH_VIEW_SETTLE_SEC)
+        frame = cam.grab()
+        if frame is None:
+            continue
+        valve_xy = _valve_px_in_frame(frame, session)
+        if valve_xy is None:
+            print(f"[coarse] pitch={pitch:+.0f}° มองไม่เห็นจุ๊บ")
+            continue
+        tip_xy = _find_gripper_tip(frame) or FALLBACK_GRIPPER_TIP_XY
+        err = math.hypot(valve_xy[0] - tip_xy[0], valve_xy[1] - tip_xy[1])
+        print(f"[coarse] pitch={pitch:+.0f}° เห็นจุ๊บ ห่างปลาย gripper {err:.0f}px")
+        if best_err is None or err < best_err:
+            best_pitch, best_err = pitch, err
+
+    if best_pitch is None:
+        return None
+    if arm.current()[3] != best_pitch:
+        if not arm.move_to(r, theta_deg, z, best_pitch):
+            return None
+    return best_pitch

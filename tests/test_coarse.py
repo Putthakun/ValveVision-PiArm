@@ -4,6 +4,7 @@ import numpy as np
 
 import coarse
 from arm import Arm
+from geometry import valve_pose
 from camera import ReplayCamera
 from coarse import _pixel_angle_to_clock, _scan_from_pose, coarse_locate
 from valve_detector import load_model
@@ -38,6 +39,34 @@ def test_มุม_3_และ_9_นาฬิกาอยู่คนละฝ�
     c9 = _pixel_angle_to_clock(hub_xy=(640, 400), valve_xy=(440, 400))
     assert abs(c3 - 3.0) < 0.1
     assert abs(c9 - 9.0) < 0.1
+
+
+def test_เลือก_pitch_จากภาพ_ต้องได้ตัวที่จุ๊บใกล้ปลาย_gripper_สุด_ไม่ใช่_margin_ดีสุด(monkeypatch):
+    """เจอจริง (2026-09-12): pitch margin ดีสุด (+50) ชันจนจุ๊บอยู่ริมเฟรม
+    ต้องเลือกจากภาพจริง — จำลองว่า pitch แรก (margin ดีสุด) เห็นจุ๊บไกลเป้า
+    pitch ที่สองไม่เห็นเลย pitch ที่สามเห็นใกล้เป้า → ต้องได้ pitch ที่สาม
+    """
+    import fine
+    from coarse import _pick_pitch_by_view
+
+    tip = (480.0, 520.0)
+    # ตำแหน่งจุ๊บที่ "เห็น" ในแต่ละ pitch (ตามลำดับที่ลอง) — None = มองไม่เห็น
+    seen = {50.0: (470.0, 40.0), 45.0: None, 40.0: (500.0, 400.0)}
+    monkeypatch.setattr(fine, "_valve_px_in_frame",
+                        lambda frame, session: seen[round(_arm.current()[3], 1)])
+    monkeypatch.setattr(fine, "_find_gripper_tip", lambda frame: tip)
+
+    class FakeCam:
+        def grab(self):
+            return object()
+
+    _arm = Arm(simulate=True)
+    r, theta, z = valve_pose(6)
+    pitches = [50.0, 45.0, 40.0]   # เรียงตาม margin (สมมติ) ไม่ใช่ตามความเห็นชัด — ทั้ง 3 เอื้อมถึงจริงที่ 6 นาฬิกา
+    pitch = _pick_pitch_by_view(FakeCam(), None, _arm, r, theta, z, pitches)
+
+    assert pitch == 40.0
+    assert _arm.current()[3] == 40.0   # และแขนต้องอยู่ที่ pitch นั้นจริง
 
 
 def test_ค่าที่เจอไม่นิ่งต้องไม่ถูกยืนยัน(monkeypatch):
