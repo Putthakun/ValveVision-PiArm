@@ -120,8 +120,11 @@ def main():
     ap.add_argument('--dist', type=float, default=150.0, help='ระยะกล้องถึงจุ๊บ (มม.)')
     ap.add_argument('--rounds', type=int, default=3)
     ap.add_argument('--pitch', type=float, default=None, help='บังคับวัดที่ pitch นี้ (ไม่ใส่ = เลือกอัตโนมัติ)')
+    ap.add_argument('--dtheta', type=float, default=DTHETA_DEG, help='ขยับ theta กี่องศาต่อการวัด (ค่าเริ่มต้น 12)')
+    ap.add_argument('--dz', type=float, default=DZ_MM, help='ขยับ z กี่ มม.ต่อการวัด (ค่าเริ่มต้น 10)')
     ap.add_argument('--dry-run', action='store_true')
     args = ap.parse_args()
+    dtheta, dz = args.dtheta, args.dz
 
     pose = start_pose(args.clock, args.dist, force_pitch=args.pitch)
     if pose is None:
@@ -133,7 +136,7 @@ def main():
     print('=' * 62)
     print(f'วัดอัตราส่วนพิกเซล — จุ๊บที่ {args.clock:g} นาฬิกา · ระยะ {args.dist:.0f} มม.')
     print(f'  ท่าเริ่มต้น: r={r0:.0f} theta={th0:.0f}° z={z0:.0f} pitch={pitch:+.0f}°')
-    print(f'  แต่ละรอบ: nudge theta {DTHETA_DEG:+.0f}° แล้ว nudge z {DZ_MM:+.0f} มม.')
+    print(f'  แต่ละรอบ: nudge theta {dtheta:+.0f}° แล้ว nudge z {dz:+.0f} มม.')
     print('=' * 62)
     if args.dry_run:
         print('(dry-run — ไม่ขยับแขน)')
@@ -171,7 +174,7 @@ def main():
             print(f'  จุด 0: ({p0[0]:.0f}, {p0[1]:.0f}) conf={p0[2]:.2f}')
 
             # ── ขยับ theta อย่างเดียว → วัดแกน x ──────────────────────
-            if not arm.nudge(DTHETA_DEG, 0.0):
+            if not arm.nudge(dtheta, 0.0):
                 print('  ✗ nudge theta ถูกปฏิเสธ'); break
             time.sleep(SETTLE_SEC)
             p1, _ = detect_valve(cam, sess, inp, out)
@@ -181,7 +184,7 @@ def main():
             print(f'  จุด 1: ({p1[0]:.0f}, {p1[1]:.0f}) conf={p1[2]:.2f}   ภาพเลื่อน x {du:+.0f} px')
 
             # ── ขยับ z อย่างเดียว → วัดแกน y ─────────────────────────
-            if not arm.nudge(0.0, DZ_MM):
+            if not arm.nudge(0.0, dz):
                 print('  ✗ nudge z ถูกปฏิเสธ'); break
             time.sleep(SETTLE_SEC)
             p2, _ = detect_valve(cam, sess, inp, out)
@@ -193,8 +196,8 @@ def main():
             if abs(du) < 3 or abs(dv) < 3:
                 print('  ⚠ ภาพเลื่อนน้อยเกินไป ค่าที่ได้จะไม่นิ่ง — ข้ามรอบนี้')
                 continue
-            results.append((DTHETA_DEG / du, DZ_MM / dv, du, dv))
-            print(f'  → deg_per_px_x = {DTHETA_DEG/du:+.5f}   mm_per_px_y = {DZ_MM/dv:+.4f}')
+            results.append((dtheta / du, dz / dv, du, dv))
+            print(f'  → deg_per_px_x = {dtheta/du:+.5f}   mm_per_px_y = {dz/dv:+.4f}')
     finally:
         cam.close()
         arm.go_scan_pose()
