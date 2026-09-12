@@ -1072,8 +1072,11 @@ def test_ครบรอบสูงสุดต้องหยุด_ไม่�
     ถ้าไม่เจอ → คืน reason="มองไม่เห็นวาล์ว" ทันที
     err_x = u - เป้า_x ;  err_y = v - เป้า_y
     ถ้า sqrt(err_x² + err_y²) < px_thresh → คืน converged=True
-    d_theta = err_x * scale["deg_per_px_x"] * gain     ← ★ คูณ gain 0.5
-    d_z     = err_y * scale["mm_per_px_y"]   * gain
+    d_theta = -err_x * scale["deg_per_px_x"] * gain    ← ★ คูณ gain 0.5 และ**ต้องมีลบ**
+    d_z     = -err_y * scale["mm_per_px_y"]   * gain
+    (★ เดิมเขียนไว้ไม่มีลบ — ผิด: scale วัดเป็น "ขยับแขน +d → ภาพเลื่อน +px"
+     ถ้าไม่ใส่ลบ จุ๊บจะเลื่อนห่างเป้าเป็น 2 เท่า ยืนยันจากแขนจริง 2026-09-12
+     และจำกัดขนาดก้าวต่อรอบไว้ด้วย (MAX_STEP_* ใน fine.py) กันหลุดเฟรม)
     ถ้า arm.nudge(d_theta, d_z) เป็น False → คืน reason="แขนขยับต่อไม่ได้"
 คืน reason="ครบรอบสูงสุด"
 ```

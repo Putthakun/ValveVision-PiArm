@@ -198,8 +198,14 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
 
-        d_theta = _clamp_step(check_x * scale["deg_per_px_x"] * gain, MAX_STEP_THETA_DEG)
-        d_z = _clamp_step(check_y * scale["mm_per_px_y"] * gain, MAX_STEP_Z_MM)
+        # ★ ต้องมีเครื่องหมายลบ — scale ที่วัดไว้คือ "ขยับแขน +d → ภาพเลื่อน +px"
+        #   (measure_pixel_scale.py เก็บ d/px ดิบๆ) ถ้าใช้ d = err×scale ตรงๆ
+        #   ตามที่ PLAN.md เขียน จุ๊บจะเลื่อนไปอีก +err = ห่างเป้าเป็น 2 เท่า
+        #   ยืนยันจากการทดสอบจริง (2026-09-12, 5.7 นาฬิกา ก้าวเล็ก): err_x
+        #   -179 → -306 หลัง nudge ตามสูตรเดิม กลับทิศแล้วทุกค่าที่วัดได้ดิบๆ
+        #   ทุก pitch สอดคล้องกันหมด ไม่ต้องกลับเครื่องหมายในไฟล์ด้วยมือ
+        d_theta = _clamp_step(-check_x * scale["deg_per_px_x"] * gain, MAX_STEP_THETA_DEG)
+        d_z = _clamp_step(-check_y * scale["mm_per_px_y"] * gain, MAX_STEP_Z_MM)
         if debug:
             print(f"         → nudge theta {d_theta:+.1f}° z {d_z:+.1f}mm")
         if not arm.nudge(d_theta, d_z):
