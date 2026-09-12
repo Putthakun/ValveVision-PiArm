@@ -104,6 +104,22 @@ def _find_gripper_tip(frame: np.ndarray) -> tuple[float, float] | None:
     return (x + cw / 2.0, float(y))     # จุดบนสุดของก้ามคีบ = จุดที่วัตถุจะถูกคีบ
 
 
+def _aim_point(frame: np.ndarray, scale: dict) -> tuple[float, float]:
+    """จุดเป้าในภาพที่จุ๊บต้องวิ่งไปทับ
+
+    aim_from="calibrated"      → ใช้ aim_x/aim_y คงที่จาก pixel_scale.json
+                                 (จุดที่จุ๊บอยู่ตอนปลายก้ามชี้ตรงจุ๊บจริง วัดด้วย
+                                 tools/hold_at_valve.py) ★ ใช้โหมดนี้ตั้งแต่ 2026-09-12
+                                 เพราะกล้องอยู่เหนือก้าม เกิด parallax: ปลายก้ามที่
+                                 ยังห่างจุ๊บ 2-3 ซม. ดูต่ำกว่าจุ๊บในภาพ ~300px ทั้งที่
+                                 ชี้ตรงกันแล้ว ปลายก้ามในภาพจึงไม่ใช่เป้าที่ถูก
+    aim_from="gripper_visible" → หาปลายก้ามสด ไม่เจอใช้ FALLBACK_GRIPPER_TIP_XY
+    """
+    if scale.get("aim_from") == "gripper_visible":
+        return _find_gripper_tip(frame) or FALLBACK_GRIPPER_TIP_XY
+    return (float(scale["aim_x"]), float(scale["aim_y"]))
+
+
 def _detect_valve_px(cam: BaseCamera, session) -> tuple[float, float] | None:
     """ถ่าย 1 เฟรม คืนตำแหน่งกึ่งกลางกล่องจุ๊บที่มั่นใจที่สุด หรือ None"""
     frame = cam.grab()
@@ -156,13 +172,8 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
             if valve_xy is None:
                 continue
 
-            if scale.get("aim_from") == "gripper_visible":
-                target_xy = _find_gripper_tip(frame)
-            else:
-                target_xy = (scale["aim_x"], scale["aim_y"])
-
-            if target_xy is not None:
-                break   # เจอทั้งคู่แล้ว ไม่ต้องลองซ้ำต่อ
+            target_xy = _aim_point(frame, scale)   # ไม่มีทาง None (มีค่าสำรองในตัว)
+            break
 
         if valve_xy is None:
             if debug and frame is not None:
@@ -170,16 +181,6 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
                 print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
                       f"เก็บภาพไว้ที่ /tmp/fine_debug_noval_{step + 1}.jpg")
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
-
-        if target_xy is None:
-            # ★ หาปลาย gripper สดไม่เจอ (เช่นเงายางทับติดกันแยกไม่ออก) —
-            #   ใช้ค่าสำรองแทนที่จะยกเลิกทั้งรอบ ไม่แม่นเท่าตรวจจับสดแต่ยังไปต่อได้
-            target_xy = FALLBACK_GRIPPER_TIP_XY
-            if debug and frame is not None:
-                cv2.imwrite(f"/tmp/fine_debug_notip_{step + 1}.jpg", frame)
-                print(f"  รอบ {step + 1}: เจอจุ๊บแต่หาปลาย gripper ไม่เจอ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
-                      f"ใช้ค่าสำรอง {FALLBACK_GRIPPER_TIP_XY} แทน "
-                      f"เก็บภาพไว้ที่ /tmp/fine_debug_notip_{step + 1}.jpg")
 
         err_x = valve_xy[0] - target_xy[0]
         err_y = valve_xy[1] - target_xy[1]

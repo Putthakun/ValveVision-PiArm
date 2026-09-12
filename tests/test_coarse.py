@@ -54,7 +54,7 @@ def test_เลือก_pitch_จากภาพ_ต้องได้ตัว
     seen = {50.0: (470.0, 40.0), 45.0: None, 40.0: (500.0, 400.0)}
     monkeypatch.setattr(fine, "_valve_px_in_frame",
                         lambda frame, session: seen[round(_arm.current()[3], 1)])
-    monkeypatch.setattr(fine, "_find_gripper_tip", lambda frame: tip)
+    monkeypatch.setattr(fine, "_aim_point", lambda frame, scale: tip)
 
     class FakeCam:
         def grab(self):

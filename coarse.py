@@ -223,7 +223,7 @@ def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
     """
     import time
 
-    from fine import FALLBACK_GRIPPER_TIP_XY, _find_gripper_tip, _valve_px_in_frame
+    from fine import _aim_point, _load_scale_for_pitch, _valve_px_in_frame
 
     best_pitch, best_err = None, None
     for pitch in pitches:
@@ -237,7 +237,7 @@ def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
         if valve_xy is None:
             print(f"[coarse] pitch={pitch:+.0f}° มองไม่เห็นจุ๊บ")
             continue
-        tip_xy = _find_gripper_tip(frame) or FALLBACK_GRIPPER_TIP_XY
+        tip_xy = _aim_point(frame, _load_scale_for_pitch(pitch))   # เป้าเดียวกับที่ fine.py ใช้
         err = math.hypot(valve_xy[0] - tip_xy[0], valve_xy[1] - tip_xy[1])
         print(f"[coarse] pitch={pitch:+.0f}° เห็นจุ๊บ ห่างปลาย gripper {err:.0f}px")
         if best_err is None or err < best_err:
