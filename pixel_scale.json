@@ -14,6 +14,22 @@
       "aim_x": null,
       "aim_y": null,
       "aim_from": "gripper_visible"
+    },
+    "45": {
+      "deg_per_px_x": -0.05621,
+      "mm_per_px_y": 0.5,
+      "measured_at_cm": 20.0,
+      "measured_at_clock": 7.0,
+      "measured_at_pitch": 45.0,
+      "rounds": 3,
+      "spread_pct": {
+        "x": 2.0,
+        "y": 248.0
+      },
+      "aim_x": null,
+      "aim_y": null,
+      "aim_from": "gripper_visible",
+      "note": "ใส่ด้วยมือ (2026-09-12) จากการวัดที่ pitch=45 dist=200 dz=30 ซึ่งแกน y กระจาย 248% สคริปต์ไม่ยอมเขียนให้ — แต่เครื่องหมาย y เป็นบวกตรงกันทั้ง 3 รอบ (+0.52/+0.66/+1.82) สลับกับ pitch=0 ที่เป็นลบ ทิศจึงเชื่อถือได้ ใช้ค่าต่ำสุด +0.5 ให้ก้าวเล็กปลอดภัย (ช้าลงแต่ไม่ overshoot) แกน x แม่น (กระจาย 2%)"
     }
   }
 }
