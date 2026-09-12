@@ -52,23 +52,36 @@ def main():
             return
         print(f"เฟสละเอียด ok — err={fine_res.final_px_err:.1f}px")
 
-        r0, theta, z, pitch = arm.current()
+        r0, theta0, z0, pitch = arm.current()
         print(f"\nพร้อมเดินหน้าทีละ {STEP_MM:.0f}mm จาก r={r0:.0f}")
+        print("★ ทุกก้าวจะให้กล้องแก้ตำแหน่งใหม่ — ชดเชย 'แขนตก' ที่มากขึ้นเรื่อยๆ ตามระยะยื่น")
         print("กด Enter เพื่อเดินหน้า 1 ก้าว · พิมพ์ y แล้ว Enter เมื่อแตะจุ๊บแล้ว · พิมพ์ q ยกเลิก")
 
         traveled = 0.0
         while True:
-            ans = input(f"  [r={r0 + traveled:.0f}, เดินไปแล้ว {traveled:.0f}mm] ").strip().lower()
+            r, theta, z, _ = arm.current()
+            ans = input(f"  [r={r:.0f} z={z:.0f} เดินไปแล้ว {traveled:.0f}mm] ").strip().lower()
             if ans == 'q':
-                print("ยกเลิก — ไม่ถอยเพราะยังไม่ได้แตะอะไร (แต่เช็คให้แน่ใจด้วยตาก่อนปล่อยมือ)")
+                print("ยกเลิก")
                 return
             if ans == 'y':
-                print(f"\n★ แตะจุ๊บที่ระยะเดินหน้ารวม {traveled:.0f}mm จากจุดที่เฟสละเอียดลู่เข้า")
+                print(f"\n★ แตะจุ๊บที่ระยะเดินหน้ารวม {traveled:.0f}mm "
+                      f"(z ต้องชดเชยขึ้นรวม {z - z0:+.0f}mm จากตอนเริ่ม = แขนตกเท่านี้)")
                 break
-            if not arm.move_to(r0 + traveled + STEP_MM, theta, z, pitch):
-                print("  ✗ เดินหน้าต่อไม่ได้ (เอื้อมไม่ถึง) — หยุดตรงนี้ ถือว่าเกินระยะที่ปลอดภัย")
+
+            if not arm.move_to(r + STEP_MM, theta, z, pitch):
+                print("  ✗ เดินหน้าต่อไม่ได้ (เอื้อมไม่ถึง) — หยุดตรงนี้")
                 break
             traveled += STEP_MM
+
+            # ★ ให้กล้องแก้ตำแหน่งใหม่ทุกก้าว — ยิ่งยื่นไกล แขนยิ่งตก (J2 แบกคาน
+            #   ที่ยาวขึ้น) ถ้าดันแบบไม่มองต่อ ปลาย gripper จะลอดใต้จุ๊บไปเลย
+            res = fine_align(cam, session, arm, scale, max_steps=4)
+            r2, _, z2, _ = arm.current()
+            print(f"    หลังแก้ด้วยกล้อง: r={r2:.0f} z={z2:.0f} (err={res.final_px_err:.0f}px) "
+                  f"[z ชดเชยสะสม {z2 - z0:+.0f}mm]")
+            if not res.converged:
+                print(f"    ⚠ กล้องแก้ไม่ลู่เข้า ({res.reason}) — ระวัง ตำแหน่งอาจเพี้ยน")
     finally:
         print("ถอยทันที (กฎข้อ 5)...")
         arm.retreat()
