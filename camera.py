@@ -71,7 +71,12 @@ class WristCamera(BaseCamera):
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     def close(self) -> None:
+        # ★ ต้อง close() ไม่ใช่แค่ stop() — stop() ยังถือ device ไว้จนโปรเซสจบ
+        #   เจอจริง (2026-09-12): hold_at_valve.py close() แล้วรันต่อ (ค้างท่าให้
+        #   ปรับกล้อง) preview_detect.py เปิดไม่ได้ "Device or resource busy"
+        #   สคริปต์ก่อนหน้าไม่เจอเพราะจบโปรเซสทันทีหลัง close()
         self.picam2.stop()
+        self.picam2.close()
 
 
 class ReplayCamera(BaseCamera):
