@@ -26,7 +26,7 @@ import numpy as np
 from arm import Arm
 from camera import BaseCamera
 
-MAX_STEPS_DEFAULT = 8
+MAX_STEPS_DEFAULT = 15   # เพิ่มจาก 8 เพราะจำกัดขนาดก้าวแล้ว (MAX_STEP_*) ต้องใช้หลายรอบกว่าเดิม
 PX_THRESH_DEFAULT = 12.0
 GAIN_DEFAULT = 0.5
 
@@ -44,6 +44,20 @@ RETRIES_PER_STEP = 3
 #   สำเร็จจริงหลายสิบภาพตอน Task 9 (ส่วนใหญ่อยู่ราว x=393-570, y=504-537)
 #   ไม่แม่นเท่าตรวจจับสด แต่ดีกว่ายกเลิกทั้งรอบเฉยๆ
 FALLBACK_GRIPPER_TIP_XY = (480.0, 520.0)
+
+# ★ จำกัดขนาดก้าวต่อรอบ — เจอจริง (2026-09) ว่า error เริ่มต้นใหญ่เสมอ (~400px
+#   เพราะปลาย gripper อยู่ล่างเฟรมแต่จุ๊บอยู่บนเฟรมโดยธรรมชาติ) ก้าวเดียว
+#   ครึ่งหนึ่งของนั้น (gain 0.5) = ขยับ z ถึง 90mm ทีเดียว หลุดเฟรมทันทีที่
+#   pitch ชัน ไม่ว่า scale จะถูกหรือผิด — ก้าวเล็กหลายรอบปลอดภัยกว่า และทำให้
+#   เห็นชัดจาก log ว่า error ลดหรือเพิ่ม (ทิศถูกไหม) โดยไม่เสียวาล์วไปจากเฟรม
+#   ★ นี่คือจำกัด "คำสั่งที่ขอ" ก่อนส่ง IK ไม่ใช่ clamp ผลของ IK — IK ยัง
+#   ปฏิเสธเป้าที่เอื้อมไม่ถึงตรงๆ เหมือนเดิม (กฎข้อ 2 ไม่กระทบ)
+MAX_STEP_THETA_DEG = 3.0
+MAX_STEP_Z_MM = 15.0
+
+
+def _clamp_step(value: float, limit: float) -> float:
+    return max(-limit, min(limit, value))
 
 
 @dataclass
@@ -184,8 +198,10 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
 
-        d_theta = check_x * scale["deg_per_px_x"] * gain
-        d_z = check_y * scale["mm_per_px_y"] * gain
+        d_theta = _clamp_step(check_x * scale["deg_per_px_x"] * gain, MAX_STEP_THETA_DEG)
+        d_z = _clamp_step(check_y * scale["mm_per_px_y"] * gain, MAX_STEP_Z_MM)
+        if debug:
+            print(f"         → nudge theta {d_theta:+.1f}° z {d_z:+.1f}mm")
         if not arm.nudge(d_theta, d_z):
             return FineResult(False, step, last_err, "แขนขยับต่อไม่ได้")
 
