@@ -66,6 +66,9 @@ class Arm:
         #   ไม่ใช่ปล่อยให้ move_to ล้มเหลวเงียบๆ (เคยทำให้วัด pixel scale ได้ค่าขยะ
         #   เพราะแขนไม่ขยับจริงแต่โค้ดเดินต่อเหมือนไม่มีอะไรเกิดขึ้น)
         self._pose_ik_valid = False
+        # ★ ใช้ยืนยันว่า "ทุกทางจบที่ท่าสแกน" ได้จริง (เกณฑ์ผ่านของ Task 11)
+        #   ตั้ง False ตอนเริ่มเพราะยังไม่ได้สั่งอะไร ไม่รู้ว่าแขนอยู่ไหนจริง
+        self.at_scan_pose = False
 
     # ─── เคลื่อนที่ ──────────────────────────────────────────────────────
     def move_to(self, r: float, theta_deg: float, z: float, pitch_deg: float) -> bool:
@@ -82,6 +85,7 @@ class Arm:
         self._move_joints(angles)
         self._pose = {'r': r, 'theta_deg': theta_deg, 'z': z, 'pitch_deg': pitch_deg}
         self._pose_ik_valid = True      # ท่านี้มาจาก IK จึง nudge ต่อได้
+        self.at_scan_pose = False
         return True
 
     def nudge(self, d_theta_deg: float, d_z: float) -> bool:
@@ -152,6 +156,7 @@ class Arm:
         r0, z0 = fk(pose['J2'], pose['J3'], pose['J4'])
         self._pose = {'r': r0, 'theta_deg': pose['J1'], 'z': z0, 'pitch_deg': 0.0}
         self._pose_ik_valid = False     # ท่าสแกนอยู่นอก LIMITS — IK สร้างซ้ำไม่ได้
+        self.at_scan_pose = True
 
     def retreat(self) -> None:
         """แตะแล้วถอยทันที — ถอย r เข้าหาฐาน ไม่ค้างดันของแข็ง (กฎข้อ 5)"""
