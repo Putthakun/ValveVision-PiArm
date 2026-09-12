@@ -52,10 +52,14 @@ def _patch_detectors(monkeypatch, valve_track, gripper_xy=(640.0, 520.0)):
 
 
 def test_ลู่เข้าเป้าแล้วต้องหยุด(monkeypatch):
-    """จำลองว่าทุกครั้งที่ nudge ความคลาดเคลื่อนลดลงครึ่งหนึ่ง จนต่ำกว่า px_thresh"""
+    """จำลองว่าทุกครั้งที่ nudge ความคลาดเคลื่อนลดลงครึ่งหนึ่ง จนต่ำกว่า px_thresh
+
+    ★ ค่าในแทร็กต้องไม่ตกในช่วง deadband (MIN_STEP_*) กลางทาง ไม่งั้นลูปจะหยุด
+    ก่อนถึงเป้าอย่างถูกต้อง (ก้าวที่ต้องสั่งเล็กกว่าที่ servo ขยับจริงได้)
+    """
     target = (640.0, 520.0)
     track = [(target[0] + 80, target[1]), (target[0] + 40, target[1]),
-             (target[0] + 20, target[1]), (target[0] + 8, target[1])]
+             (target[0] + 8, target[1])]
     _patch_detectors(monkeypatch, track, gripper_xy=target)
 
     res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
@@ -75,17 +79,37 @@ def test_มองไม่เห็นวาล์วต้องหยุด�
     assert res.steps == 0
 
 
-def test_ครบรอบสูงสุดต้องหยุด_ไม่วนไม่จบ(monkeypatch):
-    """ความคลาดเคลื่อนไม่ลดลงเลย (ค้างที่ 80px) ต้องไม่วนเกิน max_steps"""
+def test_ไม่ดีขึ้นต้องหยุด_ไม่วนไม่จบ(monkeypatch):
+    """ความคลาดเคลื่อนไม่ลดลงเลย (ค้างที่ 80px) ต้องหยุดเอง ไม่วนจนครบ max_steps
+
+    เจอจริง (2026-09-12): แขนทำซ้ำได้ ~18px พอ error ลงมาใกล้ระดับนั้นแล้ว
+    การไล่ต่อมีแต่จะแกว่ง (ไล่ตามสัญญาณรบกวน) จนค่าแย่ลง — ต้องรู้จักหยุด
+    """
     target = (640.0, 520.0)
     track = [(target[0] + 80, target[1])] * 20   # เผื่อไว้เกิน max_steps เยอะๆ
     _patch_detectors(monkeypatch, track, gripper_xy=target)
 
-    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=5, px_thresh=12.0, settle_sec=0.0)
+    res = fine_align(FakeCam(), None, _ready_arm(), SCALE, max_steps=20, px_thresh=12.0, settle_sec=0.0)
 
     assert res.converged is False
-    assert res.reason == "ครบรอบสูงสุด"
-    assert res.steps == 5
+    assert res.reason == "นิ่งที่ค่าดีที่สุดแล้ว"
+    assert res.steps < 20   # หยุดเองก่อนครบรอบ
+
+
+def test_แกว่งออกแล้วต้องกลับไปท่าที่ดีที่สุด(monkeypatch):
+    """error ดีขึ้นแล้วแย่ลง — ตอนจบแขนต้องกลับไปท่าตอนที่ดีที่สุด ไม่ใช่ท่าล่าสุด"""
+    target = (640.0, 520.0)
+    # 80 → 30 (ดีสุด) → แล้วแย่ลงเรื่อยๆ จนหยุด
+    track = [(target[0] + 80, target[1]), (target[0] + 30, target[1]),
+             (target[0] + 50, target[1]), (target[0] + 60, target[1]),
+             (target[0] + 70, target[1]), (target[0] + 80, target[1])]
+    _patch_detectors(monkeypatch, track, gripper_xy=target)
+
+    arm = _ready_arm()
+    res = fine_align(FakeCam(), None, arm, SCALE, max_steps=20, px_thresh=12.0, settle_sec=0.0)
+
+    assert res.reason == "นิ่งที่ค่าดีที่สุดแล้ว"
+    assert res.final_px_err == 30.0   # รายงานค่าที่ดีที่สุด ไม่ใช่ค่าล่าสุดที่แย่กว่า
 
 
 def test_หาปลาย_gripper_สดไม่เจอต้องใช้ค่าสำรองแทน_ไม่ยกเลิกทั้งรอบ(monkeypatch):

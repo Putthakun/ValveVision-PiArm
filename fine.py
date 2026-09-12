@@ -27,8 +27,25 @@ from arm import Arm
 from camera import BaseCamera
 
 MAX_STEPS_DEFAULT = 15   # เพิ่มจาก 8 เพราะจำกัดขนาดก้าวแล้ว (MAX_STEP_*) ต้องใช้หลายรอบกว่าเดิม
-PX_THRESH_DEFAULT = 12.0
+
+# ★ 25px ไม่ใช่ 12px — วัดความทำซ้ำได้ของแขนจริง (tools/measure_repeatability.py,
+#   9 นาฬิกา 6 รอบ) ได้กระจาย 18px ตั้งเป้าแม่นกว่าที่ฮาร์ดแวร์ทำซ้ำได้เป็นไป
+#   ไม่ได้ทางกายภาพ — ทดสอบจริง (2026-09-12) ลู่เข้าถึง 16px แล้วเริ่มไล่ตาม
+#   สัญญาณรบกวน สั่ง 0.4°/0.5mm ซึ่งต่ำกว่า deadband ของ servo (สั่งแล้วไม่ขยับ
+#   จริง) จน error ค่อยๆ drift ออกเป็น 41px
+#   25px ≈ 4mm ที่ระยะนี้ — จุ๊บกว้าง ~8-10mm จึงแตะโดนสบาย
+PX_THRESH_DEFAULT = 25.0
 GAIN_DEFAULT = 0.5
+
+# ★ คำสั่งที่เล็กกว่านี้ servo ไม่ขยับจริง (deadband) สั่งไปก็ได้ผลสุ่ม ทำให้
+#   ลูปไล่ตามสัญญาณรบกวนแทนที่จะนิ่ง — เจอจริง 2026-09-12 (รอบ 4-8 สั่ง theta
+#   +0.4° ซ้ำๆ แต่ err_x ค้างที่ +15..+20 ไม่ขยับ)
+MIN_STEP_THETA_DEG = 0.6
+MIN_STEP_Z_MM = 1.5
+
+# ★ ถ้า error ไม่ดีขึ้นติดกันเท่านี้รอบ ให้หยุด แล้วกลับไปท่าที่ดีที่สุดที่เคยได้
+#   (แขนทำซ้ำได้ 18px การไล่ต่อจึงมีแต่จะแกว่ง ไม่ได้ดีขึ้น)
+NO_IMPROVE_PATIENCE = 3
 
 # ★ ต้องรอให้แขนนิ่งก่อนถ่าย — เจอจริงจากการทดสอบ (2026-09) ว่าเฟรมแรกหลัง
 #   coarse_locate() ขยับเสร็จยังสั่นอยู่ ทำให้หาปลาย gripper ไม่เจอทั้งที่จริงๆ
@@ -168,8 +185,18 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
     ตอนเช็คว่าเข้าเป้าด้วย
     """
     last_err = 0.0
+    best_err, best_pose, no_improve = None, None, 0
 
     retry_delay = RETRY_DELAY_SEC if settle_sec > 0 else 0.0   # เทสปิดการหน่วงเวลาได้
+
+    def _finish(reason: str, step: int) -> FineResult:
+        """จบงานที่ท่าที่ดีที่สุดที่เคยวัดได้ ไม่ใช่ท่าล่าสุด (ซึ่งอาจ drift ออกไปแล้ว)"""
+        if best_pose is not None and best_err is not None and best_err < last_err:
+            if debug:
+                print(f"  → กลับไปท่าที่ดีที่สุด ({best_err:.0f}px)")
+            arm.move_to(*best_pose)
+            return FineResult(best_err < px_thresh, step, best_err, reason)
+        return FineResult(last_err < px_thresh, step, last_err, reason)
 
     def _look():
         """ถ่ายจนกว่าจะเห็นจุ๊บ (ไม่เกิน RETRIES_PER_STEP เฟรม) คืน (frame, valve_xy, target_xy)"""
@@ -222,8 +249,19 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
                 cv2.circle(vis, (int(target_xy[0]), int(target_xy[1])), 10, (0, 0, 255), 2)
                 cv2.imwrite(f"/tmp/fine_debug_step{step + 1}.jpg", vis)
 
+        # ★ จำท่าที่ดีที่สุดไว้ — แขนทำซ้ำได้ ~18px การไล่ต่อจากจุดนี้อาจแกว่งออก
+        if best_err is None or last_err < best_err:
+            best_err, best_pose, no_improve = last_err, arm.current(), 0
+        else:
+            no_improve += 1
+
         if last_err < px_thresh:
             return FineResult(True, step, last_err, "เข้าเป้า")
+
+        if no_improve >= NO_IMPROVE_PATIENCE:
+            if debug:
+                print(f"  → ไม่ดีขึ้น {no_improve} รอบติด (ดีสุด {best_err:.0f}px) หยุดไล่")
+            return _finish("นิ่งที่ค่าดีที่สุดแล้ว", step)
 
         # ★ ต้องมีเครื่องหมายลบ — scale ที่วัดไว้คือ "ขยับแขน +d → ภาพเลื่อน +px"
         #   (measure_pixel_scale.py เก็บ d/px ดิบๆ) ถ้าใช้ d = err×scale ตรงๆ
@@ -233,12 +271,24 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
         #   ทุก pitch สอดคล้องกันหมด ไม่ต้องกลับเครื่องหมายในไฟล์ด้วยมือ
         d_theta = _clamp_step(-check_x * scale["deg_per_px_x"] * gain, MAX_STEP_THETA_DEG)
         d_z = _clamp_step(-check_y * scale["mm_per_px_y"] * gain, MAX_STEP_Z_MM)
+
+        # ★ คำสั่งเล็กกว่า deadband ของ servo = สั่งไปก็ไม่ขยับจริง (ได้ผลสุ่ม)
+        #   ตัดทิ้งทีละแกน ถ้าเล็กทั้งคู่แปลว่าใกล้สุดความสามารถแล้ว หยุดเลย
+        if abs(d_theta) < MIN_STEP_THETA_DEG:
+            d_theta = 0.0
+        if abs(d_z) < MIN_STEP_Z_MM:
+            d_z = 0.0
+        if d_theta == 0.0 and d_z == 0.0:
+            if debug:
+                print(f"         → ก้าวที่ต้องสั่งเล็กกว่า deadband ของ servo ({last_err:.0f}px) หยุด")
+            return _finish("นิ่งที่ค่าดีที่สุดแล้ว", step)
+
         if debug:
             print(f"         → nudge theta {d_theta:+.1f}° z {d_z:+.1f}mm")
         if not arm.nudge(d_theta, d_z):
-            return FineResult(False, step, last_err, "แขนขยับต่อไม่ได้")
+            return _finish("แขนขยับต่อไม่ได้", step)
 
-    return FineResult(False, max_steps, last_err, "ครบรอบสูงสุด")
+    return _finish("ครบรอบสูงสุด", max_steps)
 
 
 def _load_scale_for_pitch(pitch_deg: float, path: str = "pixel_scale.json") -> dict:
