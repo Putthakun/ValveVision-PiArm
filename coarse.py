@@ -204,6 +204,8 @@ def coarse_locate(cam: BaseCamera, session, arm: Arm, *, confirm_frames: int = C
 
 
 PITCH_VIEW_SETTLE_SEC = 1.2   # รอแขนนิ่งก่อนถ่ายตอนลองแต่ละ pitch (ค่าเดียวกับ fine.py)
+PITCH_VIEW_OK_PX = 250.0      # เห็นจุ๊บห่างเป้าไม่เกินนี้ถือว่าใช้ได้ หยุดลอง pitch อื่น
+                              # (เฟสละเอียดก้าวละ ≤15mm/3° ไล่ทัน; วัดจริงท่าปกติที่ 9 นาฬิกา ~78px)
 
 
 def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
@@ -225,8 +227,14 @@ def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
 
     from fine import _aim_point, _load_scale_for_pitch, _valve_px_in_frame
 
-    best_pitch, best_err = None, None
-    for pitch in pitches:
+    # ★ ลองจาก pitch ใกล้ 0° ก่อน และหยุดทันทีที่เห็นจุ๊บในระยะใช้ได้ — ไม่ไล่ทัวร์
+    #   ทุกตัวแล้วเลือก "ภาพดีสุด" (เวอร์ชันแรก 2026-09-12) เพราะทดลองแล้วพบว่า
+    #   (1) การสวิงข้อมือไปมาหลายท่าทำให้ backlash สะสม กลับมาท่าที่เลือกแล้ว
+    #   ไม่ซ้ำเดิม (48 vs 296px ที่ท่าเดียวกัน) ทั้งที่แขนทำซ้ำได้ดี (18px) ถ้า
+    #   เข้าท่าปกติจากท่าสแกน (2) pitch แปลกๆ อย่าง -30° ไม่มี pixel_scale ที่วัด
+    #   ไว้ และท่าประหลาดถือน้ำหนักได้แย่กว่า — ท่าใกล้ 0° คือท่าปกติที่วัดค่าไว้
+    #   และทำซ้ำได้ ถ้ามองเห็นจุ๊บพอใช้ก็เอาเลย
+    for pitch in sorted(pitches, key=abs):
         if not arm.move_to(r, theta_deg, z, pitch):
             continue
         time.sleep(PITCH_VIEW_SETTLE_SEC)
@@ -239,13 +247,9 @@ def _pick_pitch_by_view(cam: BaseCamera, session, arm: Arm,
             continue
         tip_xy = _aim_point(frame, _load_scale_for_pitch(pitch))   # เป้าเดียวกับที่ fine.py ใช้
         err = math.hypot(valve_xy[0] - tip_xy[0], valve_xy[1] - tip_xy[1])
-        print(f"[coarse] pitch={pitch:+.0f}° เห็นจุ๊บ ห่างปลาย gripper {err:.0f}px")
-        if best_err is None or err < best_err:
-            best_pitch, best_err = pitch, err
+        if err <= PITCH_VIEW_OK_PX:
+            print(f"[coarse] pitch={pitch:+.0f}° เห็นจุ๊บ ห่างเป้า {err:.0f}px → ใช้ท่านี้")
+            return pitch
+        print(f"[coarse] pitch={pitch:+.0f}° เห็นจุ๊บแต่ไกลเป้า ({err:.0f}px) ลอง pitch ถัดไป")
 
-    if best_pitch is None:
-        return None
-    if arm.current()[3] != best_pitch:
-        if not arm.move_to(r, theta_deg, z, best_pitch):
-            return None
-    return best_pitch
+    return None
