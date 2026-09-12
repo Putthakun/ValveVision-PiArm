@@ -55,6 +55,16 @@ FALLBACK_GRIPPER_TIP_XY = (480.0, 520.0)
 MAX_STEP_THETA_DEG = 3.0
 MAX_STEP_Z_MM = 15.0
 
+# ★ "เงยหาขึ้นบน" เมื่อมองไม่เห็นจุ๊บ — เจอจริง (2026-09-12, 9 นาฬิกา r=371 ใกล้
+#   ระยะเอื้อมสุด): J2 รับน้ำหนักปลายแขนไม่ไหว แขนตกลง กล้องเลยมองต่ำกว่าจุ๊บ
+#   ทั้งที่ท่าเดียวกันตอนมีคนช่วยยกเห็นจุ๊บห่างเป้าแค่ 57px — สาเหตุเดียวที่ทำให้
+#   จุ๊บหายไป "ด้านบน" อย่างเป็นระบบคือแขนตก จึงลองขยับขึ้นทีละก้าว (ไม่เกิน
+#   MAX_STEP_Z_MM) จนกว่าจะเห็น หยุดทันทีที่เห็น = closed-loop ผ่านกล้อง ปรับตาม
+#   แขนตกจริงในแต่ละท่า ไม่ใช่ค่าชดเชยตายตัว (กฎข้อ 1) ถ้าขยับขึ้นครบแล้วยัง
+#   ไม่เห็นค่อยรายงาน "มองไม่เห็นวาล์ว" ตามเดิม
+SEARCH_UP_MAX_STEPS = 4
+RETRY_DELAY_SEC = 0.4   # เว้นช่วงระหว่างเฟรม retry ให้แขนหยุดส่าย (ภาพเบลอตอนยังขยับ)
+
 
 def _clamp_step(value: float, limit: float) -> float:
     return max(-limit, min(limit, value))
@@ -159,26 +169,42 @@ def fine_align(cam: BaseCamera, session, arm: Arm, scale: dict, *,
     """
     last_err = 0.0
 
-    for step in range(max_steps):
-        time.sleep(settle_sec)   # รอแขนนิ่งก่อนถ่าย (เพิ่งขยับมาจาก coarse หรือ nudge รอบก่อน)
+    retry_delay = RETRY_DELAY_SEC if settle_sec > 0 else 0.0   # เทสปิดการหน่วงเวลาได้
 
-        valve_xy = target_xy = frame = None
+    def _look():
+        """ถ่ายจนกว่าจะเห็นจุ๊บ (ไม่เกิน RETRIES_PER_STEP เฟรม) คืน (frame, valve_xy, target_xy)"""
+        frame = valve_xy = target_xy = None
         for attempt in range(RETRIES_PER_STEP):
+            if attempt:
+                time.sleep(retry_delay)
             frame = cam.grab()
             if frame is None:
                 continue
-
             valve_xy = _valve_px_in_frame(frame, session)
-            if valve_xy is None:
-                continue
+            if valve_xy is not None:
+                target_xy = _aim_point(frame, scale)   # ไม่มีทาง None (มีค่าสำรองในตัว)
+                break
+        return frame, valve_xy, target_xy
 
-            target_xy = _aim_point(frame, scale)   # ไม่มีทาง None (มีค่าสำรองในตัว)
-            break
+    for step in range(max_steps):
+        time.sleep(settle_sec)   # รอแขนนิ่งก่อนถ่าย (เพิ่งขยับมาจาก coarse หรือ nudge รอบก่อน)
+        frame, valve_xy, target_xy = _look()
+
+        # ★ มองไม่เห็น → เงยหาขึ้นบนทีละก้าวก่อนยอมแพ้ (ดู SEARCH_UP_MAX_STEPS)
+        for k in range(SEARCH_UP_MAX_STEPS):
+            if valve_xy is not None:
+                break
+            if not arm.nudge(0.0, MAX_STEP_Z_MM):
+                break   # ขึ้นต่อไม่ได้แล้ว (ชนขีดจำกัด) ไม่ฝืน
+            if debug:
+                print(f"  รอบ {step + 1}: มองไม่เห็นจุ๊บ → เงยหาขึ้น +{MAX_STEP_Z_MM:.0f}mm ({k + 1}/{SEARCH_UP_MAX_STEPS})")
+            time.sleep(settle_sec)
+            frame, valve_xy, target_xy = _look()
 
         if valve_xy is None:
             if debug and frame is not None:
                 cv2.imwrite(f"/tmp/fine_debug_noval_{step + 1}.jpg", frame)
-                print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ (ลองแล้ว {RETRIES_PER_STEP} เฟรม) — "
+                print(f"  รอบ {step + 1}: ไม่เจอกล่องจุ๊บ (ลองแล้ว {RETRIES_PER_STEP} เฟรม + เงยหา) — "
                       f"เก็บภาพไว้ที่ /tmp/fine_debug_noval_{step + 1}.jpg")
             return FineResult(False, step, last_err, "มองไม่เห็นวาล์ว")
 

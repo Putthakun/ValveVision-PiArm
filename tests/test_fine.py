@@ -119,6 +119,24 @@ def test_correct_y_False_ไม่แก้แกน_y_และไม่นั�
     assert res.reason == "เข้าเป้า"
 
 
+def test_มองไม่เห็นตอนเริ่มต้องเงยหาขึ้นก่อนยอมแพ้(monkeypatch):
+    """เจอจริง (2026-09-12): แขนตกเพราะ J2 รับน้ำหนักไม่ไหวที่ระยะเอื้อมสุด กล้องมอง
+    ต่ำกว่าจุ๊บ — ต้องลองขยับขึ้นทีละก้าวจนเห็น ไม่ใช่ยอมแพ้ตั้งแต่เฟรมแรก
+    """
+    target = (640.0, 520.0)
+    # retry รอบแรกไม่เห็นเลย → หลังเงยขึ้น 1 ก้าว เห็นใกล้เป้าจนเข้าเป้าได้ทันที
+    track = [None] * fine.RETRIES_PER_STEP + [(target[0] + 8, target[1])]
+    _patch_detectors(monkeypatch, track, gripper_xy=target)
+
+    arm = _ready_arm()
+    z0 = arm.current()[2]
+    res = fine_align(FakeCam(), None, arm, SCALE, max_steps=8, px_thresh=12.0, settle_sec=0.0)
+
+    assert res.converged is True
+    assert res.reason == "เข้าเป้า"
+    assert arm.current()[2] > z0   # ต้องได้ขยับขึ้นจริง ไม่ใช่แค่ถ่ายซ้ำ
+
+
 def test_arm_ขยับต่อไม่ได้ต้องหยุด(monkeypatch):
     target = (640.0, 520.0)
     _patch_detectors(monkeypatch, [(target[0] + 80, target[1])] * 3, gripper_xy=target)
