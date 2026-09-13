@@ -243,11 +243,6 @@ def main():
         'measured_at_pitch': pitch,
         'rounds': len(results),
         'spread_pct': {'x': round(spread_x, 1), 'y': round(spread_y, 1)},
-        # เห็นปลาย gripper ในเฟรม (ยืนยันแล้วใน Task 4) และมันติดแน่นกับกล้อง
-        # ตำแหน่งในภาพจึงคงที่เสมอ — fine.py ใช้จุดนี้เป็นเป้าให้จุ๊บมาทับ
-        'aim_x': None,
-        'aim_y': None,
-        'aim_from': 'gripper_visible',
     }
 
     # ★ merge เข้าไฟล์เดิม (ไม่ทับค่าที่วัดไว้ที่ pitch อื่น) — วัดหลาย pitch
@@ -257,6 +252,16 @@ def main():
         with open(OUT_JSON, encoding='utf-8') as f:
             existing = json.load(f)
     entries = existing.get('entries', {})
+
+    # ★ เป้าเล็ง (aim_*) เป็นคุณสมบัติของตัวยึดกล้อง ไม่ใช่ของ pitch — สคริปต์นี้วัดมันไม่ได้
+    #   เดิมเขียน aim_from="gripper_visible" ทับทุกครั้ง แต่หลังปรับกล้อง 2026-09-12
+    #   เป้าที่ถูกคือ aim_x/aim_y ที่จูนด้วยตา (ปลายก้ามในภาพมี parallax ~300px)
+    #   จึงยกค่าเป้าจาก entry เดิมมาใช้ ถ้ายังไม่มีเลยค่อยใช้ปลาย gripper ในภาพ
+    aim_src = next((e for e in entries.values() if e.get('aim_from') == 'calibrated'), None)
+    if aim_src:
+        entry.update({k: aim_src[k] for k in ('aim_x', 'aim_y', 'aim_from', 'aim_note') if k in aim_src})
+    else:
+        entry.update({'aim_x': None, 'aim_y': None, 'aim_from': 'gripper_visible'})
     entries[f'{pitch:g}'] = entry
     data = {'entries': entries}
 
