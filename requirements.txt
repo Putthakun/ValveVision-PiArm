@@ -5,3 +5,6 @@ onnxruntime
 scipy
 adafruit-blinka
 adafruit-circuitpython-pca9685
+# 1.13.0 ส่ง memoryview ให้ Adafruit-PureIO ซึ่งรับไม่ได้ → อ่าน I2C พัง (TypeError)
+adafruit-circuitpython-register<1.13
+adafruit-circuitpython-servokit
