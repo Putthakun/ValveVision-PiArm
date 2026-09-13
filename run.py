@@ -20,11 +20,61 @@ from dataclasses import dataclass
 
 from arm import Arm
 from camera import BaseCamera
-from coarse import coarse_locate
+from coarse import CONFIRM_FRAMES_DEFAULT, _scan_from_pose, coarse_locate
 from fine import _load_scale_for_pitch, fine_align
+from geometry import valve_pose
 
 TOUCH_PUSH_MM = 5.0        # ★ ตามกฎ DESIGN.md หัวข้อ 7 — ห้ามเกินนี้
 TOUCH_SETTLE_SEC = 0.6     # รอให้ถึงจริงก่อนถอย (แต่ไม่ค้างนาน — กฎข้อ 5)
+
+# ── โหมดวนยื่นหาจุ๊บ (ค่าเริ่มต้นของ `python run.py`) ──────────────────────
+# แผน end-to-end ของเจ้าของโปรเจ็ค (2026-09-13): เปิด Pi → หาจุ๊บ → ยื่นไปใกล้ที่สุด
+# ทุกตำแหน่งนาฬิกา → ค้าง → กลับท่าสแกน วนไปเรื่อยๆ ยังไม่สนความแม่น
+# ข้ามเฟสละเอียด เพราะแขนตอนยื่นไกลยังโยก/ตก (ฐาน + J2) ค่า pixel_scale จึงวัดไม่นิ่ง
+HOVER_STANDOFF_MM = 10.0   # สั่งหยุดก่อนถึงจุ๊บ — ค้างท่า 5 วิ ห้ามดันจุ๊บค้างไว้ (กฎข้อ 5)
+HOVER_HOLD_SEC = 5.0
+APPROACH_BELOW_MM = 20.0   # ลงต่ำกว่าเป้าก่อนแล้วยกขึ้นมา — วัดแล้วเป็นทิศที่แขนหยุดนิ่งที่สุด
+# ★ J1 มีระยะคลอน แขนค้างเอียงขวาแบบสุ่ม — ทดสอบด้วยตา (2026-09-13 ที่ 12 นาฬิกา):
+#   หมุนไปทางซ้าย (theta ลด) ก่อนแล้วหมุนกลับเข้าเป้า = ปลายตรงจุ๊บ · เข้าจากทางขวา = เยื้อง
+#   เข้าจากทิศเดียวกันทุกครั้ง ฟันเฟืองจึงแนบด้านเดิมเสมอ (ไม่ใช่ค่าชดเชยตำแหน่ง)
+#   ช่วงหมุนกลับเข้าเป้าต้องค่อยๆ ทีละก้าว — หมุนรวดเดียวแขนสะบัดเลยไปทางขวาจนเยื้องอีก
+J1_APPROACH_FROM_LEFT_DEG = 4.0
+J1_CREEP_STEP_DEG = 0.5
+J1_CREEP_PAUSE_SEC = 0.08
+LOOP_PAUSE_SEC = 2.0
+
+
+def hover_once(cam: BaseCamera, session, arm: Arm) -> str:
+    """หาจุ๊บ → ยื่นไปจุดที่ใกล้ที่สุดที่เอื้อมถึง → ค้าง → กลับท่าสแกนเสมอ คืนข้อความสรุปรอบ"""
+    try:
+        clock = _scan_from_pose(cam, session, arm, upper=False, confirm_frames=CONFIRM_FRAMES_DEFAULT)
+        if clock is None:
+            clock = _scan_from_pose(cam, session, arm, upper=True, confirm_frames=CONFIRM_FRAMES_DEFAULT)
+        if clock is None:
+            return "ไม่เจอจุ๊บ"
+
+        r, theta, z = valve_pose(clock)
+        target = arm.nearest_reachable(r - HOVER_STANDOFF_MM, theta, z)
+        if target is None:
+            return f"จุ๊บที่ {clock:.1f} นาฬิกา — เอื้อมไม่ถึงเลย แม้หดเข้ามา 70%"
+        rr, tt, zz, pitch, short = target
+
+        # ท่าเตรียม ไปไม่ได้ก็ไม่เป็นไร แค่ไม่ได้เข้าจากทิศที่นิ่งที่สุด
+        arm.move_to(rr, tt - J1_APPROACH_FROM_LEFT_DEG, zz - APPROACH_BELOW_MM, pitch)
+        time.sleep(0.8)
+        steps = round(J1_APPROACH_FROM_LEFT_DEG / J1_CREEP_STEP_DEG)
+        for i in range(1, steps + 1):
+            arm.move_to(rr, tt - J1_APPROACH_FROM_LEFT_DEG + i * J1_CREEP_STEP_DEG, zz - APPROACH_BELOW_MM, pitch)
+            time.sleep(J1_CREEP_PAUSE_SEC)
+        time.sleep(0.5)
+        if not arm.move_to(rr, tt, zz, pitch):
+            return f"จุ๊บที่ {clock:.1f} นาฬิกา — สั่งไปจุดที่คำนวณไว้ไม่สำเร็จ"
+        time.sleep(HOVER_HOLD_SEC)
+
+        reach = "ถึงตามเรขาคณิต" if short == 0 else f"ขาด {short:.0f}mm (ยื่นได้แค่นี้)"
+        return f"จุ๊บที่ {clock:.1f} นาฬิกา — ยื่นไป r={rr:.0f} z={zz:.0f} pitch={pitch:+.0f}° {reach}"
+    finally:
+        arm.go_scan_pose()
 
 
 @dataclass
@@ -86,7 +136,8 @@ def run_once(cam: BaseCamera, session, arm: Arm, *,
         arm.go_scan_pose()
 
 
-def main(replay_dir: str | None = None) -> None:
+def main_once(replay_dir: str | None = None) -> None:
+    """state machine เต็ม (มีเฟสละเอียด + แตะ) หนึ่งรอบ"""
     from camera import ReplayCamera, WristCamera
     from valve_detector import load_model
 
@@ -100,7 +151,38 @@ def main(replay_dir: str | None = None) -> None:
         cam.close()
 
 
-if __name__ == "__main__":
-    import sys
+def main() -> None:
+    """วนยื่นหาจุ๊บไปเรื่อยๆ จนกด Ctrl+C (หรือ systemd สั่งหยุดด้วย SIGINT)"""
+    from camera import WristCamera
+    from valve_detector import load_model
 
-    main(sys.argv[1] if len(sys.argv) > 1 else None)
+    arm = Arm()
+    if arm.simulate:
+        print("[run] ⚠️ ต่อ servo ไม่ได้ — กำลังรันโหมดจำลอง แขนจะไม่ขยับจริง", flush=True)
+    cam = WristCamera()
+    session = load_model()
+    n = 0
+    try:
+        while True:
+            n += 1
+            print(f"[รอบ {n}] {hover_once(cam, session, arm)}", flush=True)
+            time.sleep(LOOP_PAUSE_SEC)
+    except KeyboardInterrupt:
+        print("\n[run] หยุดแล้ว", flush=True)
+    finally:
+        cam.close()
+        arm.go_scan_pose()
+        print("[run] แขนกลับท่าสแกนแล้ว", flush=True)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="ValveVision — วนยื่นแขนหาจุ๊บ")
+    ap.add_argument("--once", action="store_true", help="รัน state machine เต็ม (เฟสละเอียด + แตะ) หนึ่งรอบแทน")
+    ap.add_argument("--replay", metavar="DIR", help="ใช้กับ --once: อ่านภาพจากโฟลเดอร์แทนกล้อง")
+    args = ap.parse_args()
+    if args.once:
+        main_once(args.replay)
+    else:
+        main()

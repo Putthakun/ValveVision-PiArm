@@ -6,10 +6,12 @@
 #   theta_deg มีความหมายตรงกับมุม J1 (logic angle) เป๊ะ — 90° คือ "ตรงหน้า" (ท่ากลาง)
 #   pitch_deg คือ gripper_pitch ใน ik_solver (0 = แนวนอน)
 
+import contextlib
+import io
 import math
 import random
 
-from config import LIMITS, HOME, SCAN_POSE, SCAN_POSE_UPPER
+from config import L1, LIMITS, HOME, SCAN_POSE, SCAN_POSE_UPPER
 from ik_solver import solve_ik, fk
 
 R_MAX_COMMAND = 420        # มม. — กันสั่งเลยขอบ workspace แม้ solve_ik จะหาคำตอบได้ (โซนขอบเปราะบาง)
@@ -117,6 +119,29 @@ class Arm:
 
         options.sort(key=lambda t: -t[0])
         return [p for _, p in options]
+
+    def nearest_reachable(self, r: float, theta_deg: float, z: float
+                          ) -> tuple[float, float, float, float, float] | None:
+        """จุดที่เอื้อมถึงได้ใกล้เป้าที่สุด ไล่หดเข้าหาไหล่ (J2) ตามแนวเส้นตรงจากไหล่ไปเป้า
+
+        คืน (r, theta_deg, z, pitch_deg, ขาดไปกี่มม.) หรือ None ถ้าหดไปถึง 30% แล้วยังไม่ถึง
+        pitch ที่เลือกคือตัวที่ใกล้ 0° ที่สุด (ก้ามชี้ไปทางเป้าตรงที่สุด)
+
+        ★ ยกเว้นกฎข้อ 2 ตามที่เจ้าของโปรเจ็คตัดสินใจ (2026-09-13): แขนตอนนี้ยังเอื้อม
+          ไม่ครบทุกตำแหน่งนาฬิกา แต่ต้องการเดโม่ที่ "ยื่นไปใกล้ที่สุด" ได้ทุกตำแหน่ง
+          ต่างจาก solve_ik_clamped เดิมตรงที่ solve_ik ยังคืน None ตามเดิม และค่าที่ขาด
+          ถูกส่งกลับให้ผู้เรียกแสดงเสมอ ระบบจึงยังรู้ตัวว่าไปไม่ถึง
+        """
+        dz = z - L1
+        dist = math.hypot(r, dz)
+        with contextlib.redirect_stdout(io.StringIO()):   # solve_ik พิมพ์ทุกครั้งที่ไม่ถึง — ไล่หลายร้อยครั้งจะท่วม log
+            for i in range(71):
+                s = 1.0 - i * 0.01
+                rr, zz = r * s, L1 + dz * s
+                pitches = self.reachable_pitches(rr, theta_deg, zz)
+                if pitches:
+                    return rr, theta_deg, zz, min(pitches, key=abs), round(dist * (1.0 - s), 1)
+        return None
 
     def best_pitch(self, r: float, theta_deg: float, z: float) -> float | None:
         """pitch ที่ทำให้ joint ที่คับที่สุดยังเหลือระยะขยับมากที่สุด คืน None ถ้าไม่มี pitch ไหนทำได้"""

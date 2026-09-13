@@ -119,3 +119,64 @@ def test_ขัดจังหวะกลางคันต้องถอย�
         run.run_once(FakeCam(), None, arm, settle_sec=0.0)
 
     assert arm.at_scan_pose is True
+
+
+# ── โหมดวนยื่นหาจุ๊บ (แผน end-to-end 2026-09-13) ─────────────────────────
+
+def test_เป้าที่เอื้อมถึง_nearest_reachable_ต้องไม่ขาดเลย():
+    arm = Arm(simulate=True)
+    r, th, z = valve_pose(6)
+    got = arm.nearest_reachable(r - 10, th, z)
+    assert got is not None
+    assert got[4] == 0.0
+    assert abs(got[0] - (r - 10)) < 1e-6 and abs(got[2] - z) < 1e-6
+
+
+UNREACHABLE = (400.0, 90.0, 260.0)   # ไกลและสูงกว่าจุ๊บ 12 นาฬิกา — นอกระยะเอื้อมแน่นอน
+
+
+def test_เป้าเอื้อมไม่ถึง_ต้องได้จุดที่ไปได้จริงพร้อมบอกระยะที่ขาด():
+    arm = Arm(simulate=True)
+    r, th, z = UNREACHABLE
+    assert arm.reachable_pitches(r, th, z) == []          # ยืนยันว่าเป้าจริงเอื้อมไม่ถึง
+    got = arm.nearest_reachable(r, th, z)
+    assert got is not None
+    rr, tt, zz, pitch, short = got
+    assert short > 0
+    assert arm.move_to(rr, tt, zz, pitch)                  # จุดที่คืนมาต้องสั่งไปได้จริง
+
+
+def test_ไม่เจอวาล์ว_hover_once_ต้องจบที่ท่าสแกน(monkeypatch):
+    monkeypatch.setattr(run, "_scan_from_pose", lambda *a, **k: None)
+    arm = Arm(simulate=True)
+    msg = run.hover_once(cam=None, session=None, arm=arm)
+    assert "ไม่เจอ" in msg
+    assert arm.at_scan_pose
+
+
+def test_เจอวาล์ว_hover_once_ยื่นไปแล้วต้องกลับท่าสแกนเสมอ(monkeypatch):
+    monkeypatch.setattr(run, "_scan_from_pose", lambda *a, **k: 12.0)
+    monkeypatch.setattr(run, "valve_pose", lambda clock: UNREACHABLE)
+    monkeypatch.setattr(run.time, "sleep", lambda s: None)
+    arm = Arm(simulate=True)
+    moves = []
+    real_move_to = arm.move_to
+    monkeypatch.setattr(arm, "move_to", lambda *a: moves.append(a) or real_move_to(*a))
+    msg = run.hover_once(cam=None, session=None, arm=arm)
+    assert moves, "ต้องได้ยื่นแขนออกไปจริง"
+    assert "ขาด" in msg                                     # เอื้อมไม่ถึง ต้องบอกให้เห็น
+    assert arm.at_scan_pose
+
+
+def test_hover_once_ต้องหมุน_J1_เข้าหาเป้าจากทางซ้ายเสมอ(monkeypatch):
+    """J1 มีระยะคลอน — ทดสอบด้วยตาแล้วว่าเข้าจากซ้าย (theta ลดก่อน) ถึงจะตรง"""
+    monkeypatch.setattr(run, "_scan_from_pose", lambda *a, **k: 12.0)
+    monkeypatch.setattr(run.time, "sleep", lambda s: None)
+    arm = Arm(simulate=True)
+    moves = []
+    real_move_to = arm.move_to
+    monkeypatch.setattr(arm, "move_to", lambda *a: moves.append(a) or real_move_to(*a))
+    run.hover_once(cam=None, session=None, arm=arm)
+    final_theta = moves[-1][1]
+    assert moves[0][1] < final_theta                         # ท่าแรกอยู่ทางซ้ายของเป้า
+    assert all(m[1] <= final_theta for m in moves)           # ไม่เคยเลยไปทางขวาของเป้า

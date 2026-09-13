@@ -1,0 +1,22 @@
+# systemd service — เปิด Pi แล้วแขนเริ่มวนยื่นหาจุ๊บเอง (python run.py)
+# ติดตั้ง: sudo bash setup/install_service.sh
+
+[Unit]
+Description=ValveVision - แขนกลวนยื่นหาจุ๊บ
+After=multi-user.target
+
+[Service]
+User=user
+WorkingDirectory=/home/user/ValveVision-PiArm
+Environment=PYTHONUNBUFFERED=1
+# รอให้กล้องและ I2C พร้อมหลังบูต
+ExecStartPre=/bin/sleep 10
+ExecStart=/home/user/ValveVision-PiArm/venv/bin/python3 run.py
+# SIGINT = เหมือนกด Ctrl+C → run.py พาแขนกลับท่าสแกนก่อนปิด (ห้ามทิ้งแขนค้างหน้าล้อ)
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

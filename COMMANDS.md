@@ -14,6 +14,22 @@ pkill -f preview_detect.py
 pkill -f test_coarse_live.py
 ```
 
+## รันระบบ
+
+```bash
+venv/bin/python3 run.py          # วนยื่นหาจุ๊บไปเรื่อยๆ (Ctrl+C = กลับท่าสแกนแล้วหยุด)
+venv/bin/python3 run.py --once   # state machine เต็ม (เฟสละเอียด + แตะ) หนึ่งรอบ
+```
+
+เปิด Pi แล้วเริ่มเอง (systemd service):
+
+```bash
+sudo bash setup/install_service.sh     # ติดตั้ง + เริ่มทันที ⚠️ แขนขยับใน ~10 วิ
+journalctl -u valvevision -f           # ดู log สด
+sudo systemctl stop valvevision        # หยุด (ต้องหยุดก่อนใช้กล้อง/แขนกับสคริปต์อื่น)
+sudo systemctl disable valvevision     # เลิกเริ่มเองตอนบูต
+```
+
 ## เทส
 
 ```bash
