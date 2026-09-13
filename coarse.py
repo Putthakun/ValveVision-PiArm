@@ -11,7 +11,9 @@
 #   ถ้าจำพิกัดดุมเป็นค่าคงที่ พอกล้องขยับแม้เล็กน้อยค่าที่จำไว้จะผิดทันทีโดยไม่รู้ตัว
 #   ดุมล้อเป็นวงกลมมืดเด่นชัดในทุกเฟรมอยู่แล้ว ตรวจจับสดทุกครั้งจึงเชื่อถือได้กว่า
 
+import json
 import math
+import os
 from dataclasses import dataclass
 
 import cv2
@@ -79,20 +81,45 @@ def _find_hub(frame: np.ndarray) -> tuple[float, float] | None:
     return (best[0], best[1]) if best else None
 
 
-def _pixel_angle_to_clock(hub_xy: tuple[float, float], valve_xy: tuple[float, float]) -> float:
+VP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_vp.json")
+
+
+def _load_scan_vp(pose_tag: str, path: str = VP_PATH) -> tuple[float, float]:
+    """จุดรวมสายตาแนวดิ่งของท่าสแกน ("A"/"B") ที่วัดด้วย tools/measure_vertical_vp.py"""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"ไม่พบ {path} — รัน tools/measure_vertical_vp.py ก่อน "
+                                f"(ไม่มีค่านี้ เฟสหยาบจะอ่านมุมนาฬิกาเพี้ยน ~10°)")
+    with open(path) as f:
+        x, y = json.load(f)[pose_tag]["vp"]
+    return float(x), float(y)
+
+
+def _pixel_angle_to_clock(hub_xy: tuple[float, float], valve_xy: tuple[float, float],
+                          vp_xy: tuple[float, float] | None = None) -> float:
     """แปลงตำแหน่งจุ๊บในภาพ (เทียบดุม) → มุมนาฬิกา
 
     ใช้แค่ทิศทาง (atan2) ไม่ใช่ระยะพิกเซล จึงไม่ใช่สูตร pixel→mm
     เป็นเรขาคณิตกลับด้านของ geometry.valve_pose(): phi = radians((6-clock)*30)
-    โดย phi=0 คือ "ขึ้นบน" (12 นาฬิกา) ในภาพ — ตรงกับนิยามใน CONTEXT.md
+    โดย phi=0 คือ "ขึ้นดิ่งจริง" (12 นาฬิกา) — ตรงกับนิยามใน CONTEXT.md
     (นับจากมุมมองกล้องที่มองเข้าหาหน้าล้อ)
 
-    ★ ไม่ต้องแม่น — ค่านี้ป้อนต่อให้ geometry.valve_pose() หาตำแหน่งเข้าใกล้เฉยๆ
-      ความคลาดเคลื่อนจากมุมมองกล้องไม่ตรงเป๊ะ/เลนส์บิดเบี้ยว จะถูกเฟสละเอียดแก้ทีหลัง
+    vp_xy : จุดรวมสายตาแนวดิ่ง (vanishing point) ของท่าสแกนนี้
+            ★ กล้องที่ท่าสแกนก้มลงมองล้อ เส้นดิ่งจริงในภาพจึงลู่เข้าหาจุดนี้ ไม่ได้ตั้งตรง
+              ทิศ "ลงดิ่งจริง" ที่ดุม = ทิศจากดุมไปหา vp (เอียงจากแกนตั้งของภาพ ~7–11°)
+              เคยใช้แกนตั้งของภาพตรงๆ แล้วอ่านเพี้ยน: ตั้ง 6 นาฬิกาได้ 5.62 (2026-09-13)
+            None = ถือว่ากล้องมองตรงไม่ก้ม (แกนตั้งของภาพคือแนวดิ่ง)
     """
     hx, hy = hub_xy
     vx, vy = valve_xy
     dx, dy = vx - hx, vy - hy
+
+    # หมุนเวกเตอร์ (dx, dy) ให้ทิศ "ลงดิ่งจริง" ที่ดุมกลายเป็นแกน +y ของภาพ
+    if vp_xy is not None:
+        down = math.atan2(vp_xy[0] - hx, vp_xy[1] - hy)   # มุมของทิศลงดิ่งจาก +y (บวก = เบนขวา)
+        if vp_xy[1] < hy:                                 # vp อยู่เหนือดุม (กล้องเงยขึ้น) → ทิศลงคือด้านตรงข้าม
+            down += math.pi
+        c, s = math.cos(down), math.sin(down)
+        dx, dy = c * dx - s * dy, s * dx + c * dy
     # ⚠️ กับดักทิศ (แบบเดียวกับที่ geometry.valve_pose เตือนไว้) — เคยลองกลับเครื่องหมาย
     # dx ไปรอบหนึ่ง (2026-08) จากคำบอกเล่าที่ยังไม่ได้ควบคุมตัวแปร (กด Enter เฉยๆ
     # ไม่ได้ป้อนตำแหน่งจริง) พอทดสอบใหม่แบบมี debug print เทียบกับตำแหน่งที่ตั้งจริง
@@ -141,7 +168,7 @@ def _detect_once(cam: BaseCamera, session, pose_tag: str = "") -> tuple[float, f
         print(f"[coarse] เจอจุ๊บที่ {valve_xy} แต่หาดุมล้อไม่เจอ — เก็บภาพไว้ที่ {path}")
         return None
 
-    return _pixel_angle_to_clock(hub_xy, valve_xy)
+    return _pixel_angle_to_clock(hub_xy, valve_xy, _load_scan_vp(pose_tag))
 
 
 CLOCK_STABLE_TOL = 0.5   # ชม. — ค่าที่นับว่า "นิ่ง" ต้องห่างจากเฟรมก่อนหน้าไม่เกินนี้
